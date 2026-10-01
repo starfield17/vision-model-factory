@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vision-lab.local/schemas/model/evaluation_report.schema.json",
+  "title": "EvaluationReport",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "dataset",
+    "test",
+    "export_parity",
+    "target_benchmarks",
+    "gate"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "run_id": {"type": "string", "minLength": 1},
+    "dataset": {
+      "type": "object",
+      "required": ["dataset_id", "manifest_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {"type": "string", "minLength": 1},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "test": {
+      "type": "object"
+    },
+    "export_parity": {
+      "type": "object"
+    },
+    "target_benchmarks": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "gate": {
+      "type": "object"
+    },
+    "extensions": {
+      "type": "object"
+    }
+  }
+}

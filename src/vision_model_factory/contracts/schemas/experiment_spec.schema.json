@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vision-lab.local/schemas/model/experiment_spec.schema.json",
+  "title": "ExperimentSpec",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "dataset",
+    "trainer",
+    "params",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "experiment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dataset": {
+      "type": "object",
+      "required": ["dataset_id", "manifest_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {"type": "string", "minLength": 1},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "trainer": {
+      "type": "object",
+      "required": ["adapter_id", "model_id", "checkpoint_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {"type": "string", "minLength": 1},
+        "model_id": {"type": "string", "minLength": 1},
+        "checkpoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "params": {
+      "type": "object",
+      "required": ["imgsz", "batch", "epochs", "seed", "lr0", "mosaic"],
+      "additionalProperties": false,
+      "properties": {
+        "imgsz": {"type": "integer", "exclusiveMinimum": 0},
+        "batch": {"type": "integer", "exclusiveMinimum": 0},
+        "epochs": {"type": "integer", "exclusiveMinimum": 0},
+        "seed": {"type": "integer", "minimum": 0},
+        "lr0": {"type": "number", "exclusiveMinimum": 0.0, "maximum": 1.0},
+        "mosaic": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+      }
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_run_id": {
+      "type": "string"
+    },
+    "extensions": {
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vision-lab.local/schemas/model/model_manifest.schema.json",
+  "title": "ModelManifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "package_id",
+    "created_at",
+    "task_type",
+    "dataset",
+    "run_id",
+    "task",
+    "model",
+    "evaluation",
+    "target",
+    "input",
+    "preprocess",
+    "output",
+    "decoder",
+    "class_map",
+    "postprocess"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "package_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "task_type": {"type": "string", "const": "object_detection"},
+    "dataset": {
+      "type": "object",
+      "required": ["dataset_id", "manifest_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {"type": "string", "minLength": 1},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "run_id": {"type": "string", "minLength": 1},
+    "task": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["backend", "provider", "precision"],
+      "additionalProperties": false,
+      "properties": {
+        "backend": {"type": "string"},
+        "provider": {"type": "string"},
+        "precision": {"type": "string", "enum": ["fp32", "int8"]}
+      }
+    },
+    "input": {
+      "type": "object",
+      "required": ["name", "dtype", "shape"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "dtype": {"type": "string", "enum": ["float32", "uint8"]},
+        "shape": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    },
+    "preprocess": {
+      "type": "object",
+      "required": ["id", "pad_value"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "const": "letterbox_rgb_u8_v1"},
+        "pad_value": {"type": "integer", "minimum": 0, "maximum": 255}
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["name", "dtype", "shape"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "dtype": {"type": "string", "enum": ["float32"]},
+        "shape": {
+          "type": "array",
+          "minItems": 3
+        }
+      }
+    },
+    "decoder": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "const": "yolo_xywh_scores_v1"}
+      }
+    },
+    "class_map": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["index", "class_id"],
+        "additionalProperties": false,
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "class_id": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "postprocess": {
+      "type": "object",
+      "required": ["score_threshold", "nms_iou_threshold", "max_detections"],
+      "additionalProperties": false,
+      "properties": {
+        "score_threshold": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "nms_iou_threshold": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "max_detections": {"type": "integer", "exclusiveMinimum": 0}
+      }
+    },
+    "extensions": {
+      "type": "object"
+    }
+  }
+}
