@@ -1,0 +1,190 @@
+{
+  "$defs": {
+    "FileRef": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "FileRef",
+      "type": "object"
+    },
+    "ReviewItem": {
+      "additionalProperties": false,
+      "properties": {
+        "sample_id": {
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "revision_id": {
+          "minLength": 1,
+          "title": "Revision Id",
+          "type": "string"
+        },
+        "image": {
+          "$ref": "#/$defs/FileRef"
+        },
+        "annotations": {
+          "$ref": "#/$defs/FileRef"
+        },
+        "overlay": {
+          "$ref": "#/$defs/FileRef"
+        },
+        "extensions": {
+          "title": "Extensions",
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "sample_id",
+        "revision_id",
+        "image",
+        "annotations",
+        "overlay"
+      ],
+      "title": "ReviewItem",
+      "type": "object"
+    },
+    "SamplingPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "random",
+            "stratified",
+            "risk_only"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "unit": {
+          "enum": [
+            "sample",
+            "group"
+          ],
+          "title": "Unit",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "population_count": {
+          "exclusiveMinimum": 0,
+          "title": "Population Count",
+          "type": "integer"
+        },
+        "requested_count": {
+          "exclusiveMinimum": 0,
+          "title": "Requested Count",
+          "type": "integer"
+        },
+        "extensions": {
+          "title": "Extensions",
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "unit",
+        "seed",
+        "population_count",
+        "requested_count"
+      ],
+      "title": "SamplingPlan",
+      "type": "object"
+    },
+    "SnapshotRef": {
+      "additionalProperties": false,
+      "properties": {
+        "snapshot_id": {
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "manifest_sha256"
+      ],
+      "title": "SnapshotRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "job_id": {
+      "minLength": 1,
+      "title": "Job Id",
+      "type": "string"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/SnapshotRef"
+    },
+    "task": {
+      "$ref": "#/$defs/FileRef"
+    },
+    "population": {
+      "$ref": "#/$defs/FileRef"
+    },
+    "instructions": {
+      "$ref": "#/$defs/FileRef"
+    },
+    "sampling": {
+      "$ref": "#/$defs/SamplingPlan"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/ReviewItem"
+      },
+      "minItems": 1,
+      "title": "Items",
+      "type": "array"
+    },
+    "extensions": {
+      "title": "Extensions",
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "job_id",
+    "snapshot",
+    "task",
+    "population",
+    "instructions",
+    "sampling",
+    "items"
+  ],
+  "title": "ReviewJobManifest",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vision:data:1.0.0:review_job"
+}

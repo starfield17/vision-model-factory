@@ -1,0 +1,76 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "annotation_id": {
+      "minLength": 1,
+      "title": "Annotation Id",
+      "type": "string"
+    },
+    "sample_id": {
+      "minLength": 1,
+      "title": "Sample Id",
+      "type": "string"
+    },
+    "class_id": {
+      "minLength": 1,
+      "title": "Class Id",
+      "type": "string"
+    },
+    "bbox_xyxy": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "title": "Bbox Xyxy",
+      "type": "array"
+    },
+    "origin": {
+      "enum": [
+        "model",
+        "human",
+        "imported"
+      ],
+      "title": "Origin",
+      "type": "string"
+    },
+    "annotator_run_id": {
+      "minLength": 1,
+      "title": "Annotator Run Id",
+      "type": "string"
+    },
+    "review_state": {
+      "enum": [
+        "unreviewed",
+        "model_passed",
+        "human_verified"
+      ],
+      "title": "Review State",
+      "type": "string"
+    },
+    "score": {
+      "title": "Score",
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "extensions": {
+      "title": "Extensions",
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "annotation_id",
+    "sample_id",
+    "class_id",
+    "bbox_xyxy",
+    "origin",
+    "annotator_run_id",
+    "review_state"
+  ],
+  "title": "AnnotationRecord",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vision:data:1.0.0:annotation_record"
+}

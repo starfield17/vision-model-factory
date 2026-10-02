@@ -1,0 +1,257 @@
+{
+  "$defs": {
+    "EvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\x00-\\x1f]+$",
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "original_image",
+            "overlay"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "kind"
+      ],
+      "title": "EvidenceReference",
+      "type": "object"
+    },
+    "ReportExtensions": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "title": "Evidence",
+          "items": {
+            "$ref": "#/$defs/EvidenceReference"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "title": "Severity",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ],
+          "type": "string"
+        }
+      },
+      "title": "ReportExtensions",
+      "type": "object"
+    },
+    "ReviewFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "wrong_class",
+            "missing_object",
+            "bad_box",
+            "duplicate",
+            "ambiguous"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "annotation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Annotation Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "reason",
+        "annotation_ids"
+      ],
+      "title": "ReviewFinding",
+      "type": "object"
+    },
+    "ReviewerRun": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "harness_id": {
+          "minLength": 1,
+          "title": "Harness Id",
+          "type": "string"
+        },
+        "harness_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Harness Version"
+        },
+        "model_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Id"
+        },
+        "model_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Revision"
+        },
+        "created_at": {
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "harness_id",
+        "harness_version",
+        "model_id",
+        "model_revision",
+        "created_at"
+      ],
+      "title": "ReviewerRun",
+      "type": "object"
+    },
+    "SubmissionReport": {
+      "additionalProperties": false,
+      "properties": {
+        "review_id": {
+          "minLength": 1,
+          "title": "Review Id",
+          "type": "string"
+        },
+        "sample_id": {
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "reviewer_run_id": {
+          "minLength": 1,
+          "title": "Reviewer Run Id",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "pass",
+            "suspect",
+            "abstain"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/ReviewFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "extensions": {
+          "$ref": "#/$defs/ReportExtensions"
+        }
+      },
+      "required": [
+        "review_id",
+        "sample_id",
+        "reviewer_run_id",
+        "verdict",
+        "findings"
+      ],
+      "title": "SubmissionReport",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "submission_id": {
+      "minLength": 1,
+      "title": "Submission Id",
+      "type": "string"
+    },
+    "job_id": {
+      "minLength": 1,
+      "title": "Job Id",
+      "type": "string"
+    },
+    "job_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Job Manifest Sha256",
+      "type": "string"
+    },
+    "reviewer_run": {
+      "$ref": "#/$defs/ReviewerRun"
+    },
+    "reports": {
+      "items": {
+        "$ref": "#/$defs/SubmissionReport"
+      },
+      "minItems": 1,
+      "title": "Reports",
+      "type": "array"
+    },
+    "extensions": {
+      "title": "Extensions",
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "submission_id",
+    "job_id",
+    "job_manifest_sha256",
+    "reviewer_run",
+    "reports"
+  ],
+  "title": "ReviewSubmission",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vision:data:1.0.0:review_submission"
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "owner": "VisionFactory/app.datasets",
+  "files": {
+    "annotation_record.schema.json": "0dbaeb4e1b5ef8b232299f2421e2d9e0808d597dda6cbf93eca820b29f70ce04",
+    "dataset_manifest.schema.json": "df436f77884347eb85efec6bdb2ea65746131bbe244d482b24e629a615cc8ece",
+    "quality_spec.schema.json": "87197494d2725d73eb6d0f698b7bdbf68b17b5da845de9cc683b5f8bfd5a506a",
+    "review_job.schema.json": "6b338c53c1846852a66100c7ecb3874530e3fe1c87f35e8d63ce3ca97f549acf",
+    "review_report.schema.json": "2f5308ead845e0b43002eca2a4519017f57c5a3f687fe60a46fd0bd22101e3c6",
+    "review_submission.schema.json": "76d0ee844a5e602808c494ece5aad712ab147a422d4d8e635c8d964cd488343d",
+    "sample_record.schema.json": "8dedf9adf803f04a4e31c3ddb66996c3320fa412dc50f4cfcfb2d59fe1de63af",
+    "task_spec.schema.json": "347f8881b766175a667b0f2efe9f1dc0b892ab07a88f94859bc15d226e46c8d6"
+  }
+}
