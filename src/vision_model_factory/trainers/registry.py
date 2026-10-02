@@ -13,12 +13,17 @@ class TrainerRegistry:
                 "yolov8n.pt",
                 "yolov8s.pt",
                 "yolov8m.pt",
+                "yolo11n.pt",
+                "yolo26n.pt",
                 "mock_yolo_v1",
             }
         }
         # Whitelisted base checkpoints per model_id -> set of known SHA-256 digests (or wildcard for mocks)
         self._allowed_checkpoints: Dict[str, Set[str]] = {
             "mock_yolo_v1": {"*"},
+            "yolo26n.pt": {"9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef"},
+            "yolo11n.pt": {"0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"},
+            "yolov8n.pt": {"f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"},
         }
 
     def register_adapter_model(

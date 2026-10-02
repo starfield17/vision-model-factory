@@ -16,7 +16,11 @@ def test_trainer_registry():
     assert registry.is_adapter_allowed("yolo_detection_v1") is True
     assert registry.is_adapter_allowed("unknown_adapter") is False
     assert registry.is_model_allowed("yolo_detection_v1", "mock_yolo_v1") is True
+    assert registry.is_model_allowed("yolo_detection_v1", "yolo26n.pt") is True
+    assert registry.is_model_allowed("yolo_detection_v1", "yolo11n.pt") is True
     assert registry.is_model_allowed("yolo_detection_v1", "unwhitelisted_model.pt") is False
+    expected_sha = "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef"
+    assert registry.is_checkpoint_allowed("yolo26n.pt", expected_sha) is True
 
 
 def test_yolo_dataset_preparation_and_partial_exclusion(synthetic_dataset_dir: Path, tmp_path: Path):

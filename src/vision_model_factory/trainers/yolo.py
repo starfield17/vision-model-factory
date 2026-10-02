@@ -216,6 +216,12 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
         try:
             from ultralytics import YOLO
 
+            device = "cpu"
+            if torch.cuda.is_available():
+                device = "0"
+            elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+                device = "mps"
+
             model = YOLO(config.model_id)
             model.train(
                 data=str(data_yaml_path),
@@ -225,6 +231,7 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
                 seed=config.params.seed,
                 lr0=config.params.lr0,
                 mosaic=config.params.mosaic,
+                device=device,
                 project=str(output_dir),
                 name="run",
                 exist_ok=True,
@@ -246,7 +253,7 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
             duration = time.time() - t0
 
             # Val metrics
-            val_results = model.val(data=str(data_yaml_path), split="val", verbose=False)
+            val_results = model.val(data=str(data_yaml_path), split="val", device=device, verbose=False)
             metrics = {
                 "mAP50": float(val_results.box.map50),
                 "mAP50-95": float(val_results.box.map),

@@ -19,6 +19,8 @@ class ExperimentPolicy:
                 "yolov8n.pt",
                 "yolov8s.pt",
                 "yolov8m.pt",
+                "yolo11n.pt",
+                "yolo26n.pt",
                 "mock_yolo_v1",
             }
         }

@@ -19,6 +19,12 @@ dist/
 *.log
 *.tmp
 *.bak
+runs/
+datasets/
+workspaces/
+releases/
+*.pt
+*.onnx
 
 # IDE/Editor
 .vscode/

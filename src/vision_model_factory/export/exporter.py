@@ -61,3 +61,54 @@ def export_torch_model_to_onnx(
 
     sha256 = compute_sha256_file(out_file)
     return out_file, sha256
+
+
+def export_yolo_checkpoint_to_onnx(
+    checkpoint_path: Union[str, Path],
+    output_path: Union[str, Path],
+    imgsz: int = 640,
+    opset_version: int = 18,
+) -> Tuple[Path, str]:
+    """
+    Export a trained YOLO checkpoint (.pt) to standard ONNX.
+    Ensures input tensor is 'images' [1, 3, imgsz, imgsz]
+    and output tensor is 'output0' [1, 4 + K, N].
+
+    Args:
+        checkpoint_path: Path to YOLO PyTorch checkpoint (.pt)
+        output_path: Target path for the .onnx file
+        imgsz: Image dimension for model input
+        opset_version: ONNX opset version
+
+    Returns:
+        (saved_path, sha256_digest)
+    """
+    import shutil
+
+    from ultralytics import YOLO
+
+    ckpt_file = Path(checkpoint_path).resolve()
+    if not ckpt_file.is_file():
+        raise FileNotFoundError(f"Checkpoint file not found: {ckpt_file}")
+
+    out_file = Path(output_path).resolve()
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    yolo_model = YOLO(str(ckpt_file))
+    exported_raw = yolo_model.export(
+        format="onnx",
+        imgsz=imgsz,
+        dynamic=False,
+        simplify=False,
+        opset=opset_version,
+    )
+    exported_path = Path(exported_raw).resolve()
+    if exported_path != out_file:
+        shutil.move(str(exported_path), str(out_file))
+
+    # Verify ONNX model structure
+    onnx_model = onnx.load(str(out_file))
+    onnx.checker.check_model(onnx_model)
+
+    sha256 = compute_sha256_file(out_file)
+    return out_file, sha256

@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 from vision_model_factory.contracts.models import ClassMapItem, FileRef, SampleRecord
-from vision_model_factory.export.exporter import export_torch_model_to_onnx
+from vision_model_factory.export.exporter import (
+    export_torch_model_to_onnx,
+    export_yolo_checkpoint_to_onnx,
+)
 from vision_model_factory.export.parity import check_export_parity
 from vision_model_factory.export.quantization import benchmark_onnx_model, validate_calibration_samples
 from vision_model_factory.trainers.yolo import TinyYoloMockNet
@@ -76,3 +79,36 @@ def test_quantization_calibration_sample_split_guard():
     ]
     with pytest.raises(ValueError, match="Calibration forbidden on non-train split"):
         validate_calibration_samples(invalid_samples)
+
+
+def test_yolo_checkpoint_export_and_parity(tmp_path: Path):
+    ckpt_path = Path("yolo26n.pt")
+    if not ckpt_path.is_file():
+        pytest.skip("yolo26n.pt checkpoint not present locally")
+
+    from ultralytics import YOLO
+
+    yolo_model = YOLO(str(ckpt_path))
+    class_map = [ClassMapItem(index=i, class_id=str(name)) for i, name in yolo_model.names.items()]
+
+    out_onnx = tmp_path / "yolo26n_exported.onnx"
+    out_path, sha256 = export_yolo_checkpoint_to_onnx(
+        checkpoint_path=ckpt_path,
+        output_path=out_onnx,
+        imgsz=640,
+    )
+
+    assert out_path.is_file()
+    assert len(sha256) == 64
+
+    # Parity verification with PyTorch model
+    parity = check_export_parity(
+        torch_model=yolo_model.model,
+        onnx_path=out_path,
+        class_map=class_map,
+        test_input_shape=(1, 3, 640, 640),
+        tensor_atol=5e-3,
+    )
+    assert parity["status"] == "passed"
+    assert parity["raw_tensor"]["passed"] is True
+    assert parity["detections"]["matched"] is True

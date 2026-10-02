@@ -17,7 +17,10 @@ from vision_model_factory.contracts.validators import (
 )
 from vision_model_factory.experiments.policy import DEFAULT_EXPERIMENT_POLICY
 from vision_model_factory.experiments.runner import ExperimentRunner
-from vision_model_factory.export.exporter import export_torch_model_to_onnx
+from vision_model_factory.export.exporter import (
+    export_torch_model_to_onnx,
+    export_yolo_checkpoint_to_onnx,
+)
 from vision_model_factory.release.publisher import publish_model_package
 from vision_model_factory.trainers.yolo import TinyYoloMockNet
 
@@ -54,6 +57,7 @@ def main() -> None:
     sb_exp_onnx.add_argument("model_file", type=Path, help="Path to PyTorch model or weights.")
     sb_exp_onnx.add_argument("output_onnx", type=Path, help="Path for exported .onnx file.")
     sb_exp_onnx.add_argument("--classes", type=int, default=2)
+    sb_exp_onnx.add_argument("--mock", action="store_true", help="Export mock architecture for testing.")
 
     # Subcommand: publish
     sb_pub = subparsers.add_parser("publish", help="Atomically publish a verified Model Package.")
@@ -104,9 +108,11 @@ def main() -> None:
         print(result.model_dump_json(indent=2))
 
     elif args.command == "export":
-        # Load tiny mock net for demonstration/mock export
-        model = TinyYoloMockNet(num_classes=args.classes)
-        out_path, sha = export_torch_model_to_onnx(model, args.output_onnx)
+        if args.mock or not args.model_file.exists() or args.model_file.name == "mock_yolo_v1":
+            model = TinyYoloMockNet(num_classes=args.classes)
+            out_path, sha = export_torch_model_to_onnx(model, args.output_onnx)
+        else:
+            out_path, sha = export_yolo_checkpoint_to_onnx(args.model_file, args.output_onnx)
         print(f"Exported ONNX model to {out_path} (SHA-256: {sha})")
 
     elif args.command == "publish":

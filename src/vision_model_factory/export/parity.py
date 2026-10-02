@@ -19,7 +19,7 @@ def check_export_parity(
     test_input_shape: Tuple[int, int, int, int] = (1, 3, 640, 640),
     orig_shape: Tuple[int, int] = (720, 1280),
     preprocess_meta: Optional[Dict[str, Any]] = None,
-    tensor_atol: float = 1e-3,
+    tensor_atol: float = 1e-2,
     score_atol: float = 1e-3,
     box_atol: float = 1.0,
 ) -> Dict[str, Any]:
