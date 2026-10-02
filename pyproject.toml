@@ -13,6 +13,7 @@ authors = [
     {name = "Vision Lab Team"}
 ]
 dependencies = [
+    "rfc3339-validator>=0.1.4",
     "pydantic>=2.0.0",
     "numpy>=1.24.0",
     "Pillow>=9.0.0",
@@ -35,6 +36,9 @@ model-factory = "vision_model_factory.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"vision_model_factory" = ["contracts/schemas/*.json", "contracts/schemas/data_v1/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
