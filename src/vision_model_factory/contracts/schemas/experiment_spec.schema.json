@@ -14,43 +14,75 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+      "$ref": "#/$defs/schemaVersion"
     },
     "experiment_id": {
       "type": "string",
       "minLength": 1
     },
     "dataset": {
-      "type": "object",
-      "required": ["dataset_id", "manifest_sha256"],
-      "additionalProperties": false,
-      "properties": {
-        "dataset_id": {"type": "string", "minLength": 1},
-        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-      }
+      "$ref": "#/$defs/datasetRef"
     },
     "trainer": {
       "type": "object",
-      "required": ["adapter_id", "model_id", "checkpoint_sha256"],
+      "required": [
+        "adapter_id",
+        "model_id",
+        "checkpoint_sha256"
+      ],
       "additionalProperties": false,
       "properties": {
-        "adapter_id": {"type": "string", "minLength": 1},
-        "model_id": {"type": "string", "minLength": 1},
-        "checkpoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "params": {
       "type": "object",
-      "required": ["imgsz", "batch", "epochs", "seed", "lr0", "mosaic"],
+      "required": [
+        "imgsz",
+        "batch",
+        "epochs",
+        "seed",
+        "lr0",
+        "mosaic"
+      ],
       "additionalProperties": false,
       "properties": {
-        "imgsz": {"type": "integer", "exclusiveMinimum": 0},
-        "batch": {"type": "integer", "exclusiveMinimum": 0},
-        "epochs": {"type": "integer", "exclusiveMinimum": 0},
-        "seed": {"type": "integer", "minimum": 0},
-        "lr0": {"type": "number", "exclusiveMinimum": 0.0, "maximum": 1.0},
-        "mosaic": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+        "imgsz": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "batch": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "epochs": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lr0": {
+          "type": "number",
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0
+        },
+        "mosaic": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
       }
     },
     "reason": {
@@ -58,10 +90,79 @@
       "minLength": 1
     },
     "parent_run_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "extensions": {
       "type": "object"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\])(?![A-Za-z]:[\\\\/])(?!\\.\\.(?:[/\\\\]|$))(?![\\s\\S]*[\\x00-\\x1f])(?!.*(?:[/\\\\]|^)\\.\\.(?:[/\\\\]|$))[^\\x00-\\x1f]+$",
+      "description": "Relative path inside the package. Absolute paths, drive letters, UNC and any '..' segment are rejected structurally."
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "RFC 3339 timestamp in UTC ('Z' suffix required per 00-overall-architecture.md 3.6)"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "SemVer"
+    },
+    "fileRef": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "datasetRef": {
+      "type": "object",
+      "required": [
+        "dataset_id",
+        "manifest_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "dimension": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Declared dynamic dimension name"
+        }
+      ]
     }
   }
 }

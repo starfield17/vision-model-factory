@@ -13,6 +13,7 @@ from vision_model_factory.contracts.models import (
     SampleRecord,
     TaskSpec,
 )
+from vision_model_factory.contracts.schema_validation import SchemaValidationError, validate_instance
 
 
 class ValidationError(Exception):
@@ -107,6 +108,10 @@ def validate_dataset_package(
         except Exception as e:
             raise ValidationError(f"Failed to parse dataset.json: {e}")
 
+    try:
+        validate_instance(raw_manifest, "dataset_manifest")
+    except SchemaValidationError as e:
+        raise ValidationError(str(e))
     manifest = DatasetManifest.model_validate(raw_manifest)
 
     # Verify task file
@@ -119,7 +124,12 @@ def validate_dataset_package(
             f"Task file SHA-256 mismatch: expected {manifest.task.sha256}, got {actual_task_sha}"
         )
     with task_file.open("r", encoding="utf-8") as f:
-        task = TaskSpec.model_validate(json.load(f))
+        task_raw = json.load(f)
+    try:
+        validate_instance(task_raw, "task_spec")
+    except SchemaValidationError as e:
+        raise ValidationError(str(e))
+    task = TaskSpec.model_validate(task_raw)
 
     # Verify quality file
     quality_file = validate_relative_path(manifest.quality.path, pkg_dir)
@@ -152,8 +162,10 @@ def validate_dataset_package(
             if not line:
                 continue
             try:
-                rec = SampleRecord.model_validate_json(line)
-            except Exception as e:
+                rec_raw = json.loads(line)
+                validate_instance(rec_raw, "sample_record")
+                rec = SampleRecord.model_validate(rec_raw)
+            except (SchemaValidationError, ValueError) as e:
                 raise ValidationError(f"Invalid SampleRecord at line {line_num} in samples.jsonl: {e}")
 
             if rec.sample_id in sample_ids:
@@ -162,8 +174,15 @@ def validate_dataset_package(
             sample_by_id[rec.sample_id] = rec
             samples.append(rec)
 
-            # Check image file existence if it exists in bundle
+            # A Dataset Package is self-contained, including mock-mode fixtures.
             image_path = validate_relative_path(rec.file.path, pkg_dir)
+            if not image_path.is_file():
+                raise ValidationError(f"Missing image file for sample {rec.sample_id}")
+            from PIL import Image
+            with Image.open(image_path) as image:
+                image.load()
+                if image.size != (rec.width, rec.height) or image.getexif().get(274, 1) != 1:
+                    raise ValidationError(f"Image dimensions/EXIF mismatch: {rec.sample_id}")
             if image_path.is_file():
                 actual_img_sha = compute_sha256_file(image_path)
                 if actual_img_sha != rec.file.sha256:
@@ -176,6 +195,12 @@ def validate_dataset_package(
             if rec.group_id not in group_to_splits:
                 group_to_splits[rec.group_id] = set()
             group_to_splits[rec.group_id].add(rec.split)
+
+    image_splits = {}
+    for sample in samples:
+        prior = image_splits.setdefault(sample.file.sha256, sample.split)
+        if prior != sample.split:
+            raise ValidationError("Identical image bytes cross splits")
 
     # Enforce split group isolation: no group may span multiple splits
     for gid, splits in group_to_splits.items():
@@ -204,8 +229,10 @@ def validate_dataset_package(
             if not line:
                 continue
             try:
-                ann = AnnotationRecord.model_validate_json(line)
-            except Exception as e:
+                ann_raw = json.loads(line)
+                validate_instance(ann_raw, "annotation_record")
+                ann = AnnotationRecord.model_validate(ann_raw)
+            except (SchemaValidationError, ValueError) as e:
                 raise ValidationError(f"Invalid AnnotationRecord at line {line_num}: {e}")
 
             if ann.annotation_id in annotation_ids:
@@ -249,6 +276,10 @@ def validate_model_package(pkg_dir: Path) -> Tuple[ModelManifest, TaskSpec, Eval
         except Exception as e:
             raise ValidationError(f"Failed to parse model.json: {e}")
 
+    try:
+        validate_instance(raw_manifest, "model_manifest")
+    except SchemaValidationError as e:
+        raise ValidationError(str(e))
     manifest = ModelManifest.model_validate(raw_manifest)
 
     # Verify task file
@@ -261,7 +292,12 @@ def validate_model_package(pkg_dir: Path) -> Tuple[ModelManifest, TaskSpec, Eval
             f"Task file SHA-256 mismatch in model package: expected {manifest.task.sha256}, got {actual_task_sha}"
         )
     with task_file.open("r", encoding="utf-8") as f:
-        task = TaskSpec.model_validate(json.load(f))
+        task_raw = json.load(f)
+    try:
+        validate_instance(task_raw, "task_spec")
+    except SchemaValidationError as e:
+        raise ValidationError(str(e))
+    task = TaskSpec.model_validate(task_raw)
 
     # Verify model file
     model_file = validate_relative_path(manifest.model.path, pkg_dir)
@@ -283,7 +319,34 @@ def validate_model_package(pkg_dir: Path) -> Tuple[ModelManifest, TaskSpec, Eval
             f"Evaluation file SHA-256 mismatch: expected {manifest.evaluation.sha256}, got {actual_eval_sha}"
         )
     with eval_file.open("r", encoding="utf-8") as f:
-        evaluation = EvaluationReport.model_validate(json.load(f))
+        eval_raw = json.load(f)
+    try:
+        validate_instance(eval_raw, "evaluation_report")
+    except SchemaValidationError as e:
+        raise ValidationError(str(e))
+    evaluation = EvaluationReport.model_validate(eval_raw)
+
+    # Cross-artifact consistency: a package must not ship an evaluation report that
+    # describes a different run or a different dataset than the manifest claims.
+    if evaluation.run_id != manifest.run_id:
+        raise ValidationError(
+            f"Model package '{manifest.package_id}' is inconsistent: model.json run_id="
+            f"'{manifest.run_id}' but evaluation.json run_id='{evaluation.run_id}'"
+        )
+    if evaluation.dataset.dataset_id != manifest.dataset.dataset_id:
+        raise ValidationError(
+            f"Model package '{manifest.package_id}' is inconsistent: model.json dataset_id="
+            f"'{manifest.dataset.dataset_id}' but evaluation.json dataset_id="
+            f"'{evaluation.dataset.dataset_id}'"
+        )
+    if evaluation.dataset.manifest_sha256 != manifest.dataset.manifest_sha256:
+        raise ValidationError(
+            f"Model package '{manifest.package_id}' is inconsistent: model.json dataset "
+            "manifest_sha256 differs from the one recorded in evaluation.json"
+        )
+    # Whether this package may be *released* is a publication decision owned by
+    # `release`, which re-derives the gate from an operator policy. This validator only
+    # asserts internal consistency, so a failed package can still be inspected.
 
     # Verify class map semantics
     validate_class_map_against_task(manifest.class_map, task, require_consecutive_zero_indexed=True)

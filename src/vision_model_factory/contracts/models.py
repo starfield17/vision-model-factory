@@ -1,16 +1,36 @@
 """Pydantic data models for Vision Model Factory contracts."""
 
+import json
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from vision_model_factory.contracts.hashing import is_valid_sha256
+
+# RFC 3339 in UTC. Mirrors $defs.utcTimestamp in the bundled JSON Schemas; time stamps in
+# published artifacts are required to be UTC by 00-overall-architecture.md 3.6.
+UTC_TIMESTAMP_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
 
 
 class BaseContractModel(BaseModel):
     """Base model enforcing extra forbidden and strict attribute access."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+def model_json(model: BaseContractModel, indent: Optional[int] = None) -> str:
+    """Serialize a contract model to JSON, omitting unset optional fields.
+
+    An explicit helper rather than an override of model_dump/model_dump_json: overriding
+    those would silently change serialization semantics for every caller, including the
+    `effective_config_sha256` digest computed in the runner. The contract declares
+    optional fields as "optional object"; an explicit null would be a third, undefined
+    state that consumers would have to guess about.
+    """
+
+    if indent is None:
+        return model.model_dump_json(exclude_none=True)
+    return json.dumps(model.model_dump(mode="json", exclude_none=True), indent=indent, ensure_ascii=False)
 
 
 class FileRef(BaseContractModel):
@@ -76,7 +96,9 @@ class DatasetManifest(BaseContractModel):
 
     schema_version: str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
     dataset_id: str = Field(..., min_length=1)
-    created_at: str = Field(..., min_length=1)
+    created_at: str = Field(
+        ..., pattern=UTC_TIMESTAMP_PATTERN, description="RFC 3339 UTC timestamp (Z suffix required)"
+    )
     task: FileRef
     samples: FileRef
     annotations: FileRef
@@ -185,10 +207,16 @@ class RunResult(BaseContractModel):
 
 
 class TargetSpec(BaseContractModel):
-    """Target deployment environment specification."""
+    """Target deployment environment specification.
+
+    v1 declares only what this repository can actually produce and verify. `cuda`,
+    `tensorrt` and `rknn` backends are deliberately absent: no implementation and no
+    target-machine verification exists for them, and a declared-but-unverified profile
+    is exactly what the architecture spec forbids ("没有对应实测的 profile 不声明支持").
+    """
 
     backend: Literal["onnxruntime"] = "onnxruntime"
-    provider: Literal["cpu", "cuda", "tensorrt"] = "cpu"
+    provider: Literal["cpu"] = "cpu"
     precision: Literal["fp32", "int8"] = "fp32"
 
 
@@ -241,7 +269,9 @@ class ModelManifest(BaseContractModel):
 
     schema_version: str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
     package_id: str = Field(..., min_length=1)
-    created_at: str = Field(..., min_length=1)
+    created_at: str = Field(
+        ..., pattern=UTC_TIMESTAMP_PATTERN, description="RFC 3339 UTC timestamp (Z suffix required)"
+    )
     task_type: Literal["object_detection"] = "object_detection"
     dataset: DatasetRef
     run_id: str = Field(..., min_length=1)
@@ -258,14 +288,295 @@ class ModelManifest(BaseContractModel):
     extensions: Optional[Dict[str, Any]] = None
 
 
+class InferenceConfig(BaseContractModel):
+    """The postprocess and geometry a measurement was actually taken under.
+
+    Carried alongside every measured section so numbers from different configurations
+    cannot be silently mixed, and so a threshold override is recorded rather than
+    implicit. Mirrors `$defs.inferenceConfig` in the evaluation report schema.
+    """
+
+    score_threshold: float = Field(..., ge=0.0, le=1.0)
+    nms_iou_threshold: float = Field(..., ge=0.0, le=1.0)
+    max_detections: int = Field(..., gt=0)
+    target_shape: List[int] = Field(..., min_length=2, max_length=2)
+
+    @field_validator("target_shape")
+    @classmethod
+    def check_positive(cls, v: List[int]) -> List[int]:
+        if any(d <= 0 for d in v):
+            raise ValueError(f"target_shape dimensions must be positive, got {v}")
+        return v
+
+    @classmethod
+    def from_manifest(cls, manifest: "ModelManifest") -> "InferenceConfig":
+        """Derive the config a model package declares, refusing dynamic spatial input."""
+        spatial = manifest.input.shape[2:4]
+        target = [d for d in spatial if isinstance(d, int)]
+        if len(target) != 2:
+            raise ValueError(
+                f"Cannot derive a fixed evaluation geometry from input shape "
+                f"{manifest.input.shape}; measurement requires static spatial dimensions."
+            )
+        return cls(
+            score_threshold=manifest.postprocess.score_threshold,
+            nms_iou_threshold=manifest.postprocess.nms_iou_threshold,
+            max_detections=manifest.postprocess.max_detections,
+            target_shape=target,
+        )
+
+
+class PerClassDetectionMetrics(BaseContractModel):
+    """Per-class detection quality on the evaluated split."""
+
+    class_id: str = Field(..., min_length=1)
+    ap50: float = Field(..., ge=0.0, le=1.0)
+    ap50_95: float = Field(..., ge=0.0, le=1.0)
+    precision: float = Field(..., ge=0.0, le=1.0)
+    recall: float = Field(..., ge=0.0, le=1.0)
+    total_gt: int = Field(..., ge=0)
+    total_pred: int = Field(..., ge=0)
+
+
+class TestEvaluationSection(BaseContractModel):
+    """Locked test split quality evidence.
+
+    Carries the evaluation data/protocol reference, sample counts and the actual
+    inference configuration, as required by the evaluation contract.
+    """
+
+    protocol_id: str = Field(..., min_length=1)
+    ground_truth: Literal["human_verified"] = "human_verified"
+    sample_count: int = Field(..., gt=0)
+    gt_annotation_count: int = Field(..., ge=0)
+    excluded_partial_count: int = Field(..., ge=0)
+    mAP50: float = Field(..., ge=0.0, le=1.0)
+    mAP50_95: float = Field(..., ge=0.0, le=1.0)
+    classes: Dict[str, PerClassDetectionMetrics]
+    inference_config: InferenceConfig
+    extensions: Optional[Dict[str, Any]] = None
+
+    @field_validator("classes")
+    @classmethod
+    def check_classes_nonempty(cls, v: Dict[str, PerClassDetectionMetrics]):
+        if not v:
+            raise ValueError("test.classes must report at least one class")
+        return v
+
+
+class ParityTolerances(BaseContractModel):
+    """Declared comparison tolerances for export parity."""
+
+    tensor_atol: float = Field(..., ge=0.0)
+    score_atol: float = Field(..., ge=0.0)
+    box_atol: float = Field(..., ge=0.0)
+
+
+class ParityTensorComparison(BaseContractModel):
+    """Raw output tensor difference between reference and exported model."""
+
+    max_abs_diff: float = Field(..., ge=0.0)
+    mean_abs_diff: float = Field(..., ge=0.0)
+    passed: bool
+
+
+class ParityDetectionComparison(BaseContractModel):
+    """Decoded detection-level difference between reference and exported model."""
+
+    ref_count: int = Field(..., ge=0)
+    ort_count: int = Field(..., ge=0)
+    matched: bool
+    max_score_diff: float = Field(..., ge=0.0)
+    max_box_diff: float = Field(..., ge=0.0)
+
+
+class ParitySelfTest(BaseContractModel):
+    """Proof that a parity comparison can actually fail.
+
+    Parity that never saw a difference proves nothing: two empty detection lists "match"
+    trivially. The comparison is therefore required to report what it detected when the
+    reference detections were deliberately perturbed.
+    """
+
+    perturbation_px: float = Field(..., gt=0.0)
+    detected_perturbation: bool
+
+
+class ExportParitySection(BaseContractModel):
+    """Export parity evidence.
+
+    A `passed` status is structurally impossible without non-empty decoded detections
+    on both sides: an empty-vs-empty comparison proves nothing about coordinate
+    recovery and must not be recordable as a pass.
+    """
+
+    status: Literal["passed", "failed"]
+    method: str = Field(..., min_length=1)
+    input_reference: str = Field(..., min_length=1)
+    matching_method: str = Field(..., min_length=1)
+    tolerances: ParityTolerances
+    raw_tensor: ParityTensorComparison
+    detections: ParityDetectionComparison
+    # Optional because parity that was never run has no self-test to report; a `passed`
+    # verdict must carry one, enforced below.
+    self_test: Optional[ParitySelfTest] = None
+    exceptions: List[str] = Field(default_factory=list)
+    inference_config: InferenceConfig
+    extensions: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def check_passed_is_substantiated(self) -> "ExportParitySection":
+        if self.status != "passed":
+            return self
+        if not self.raw_tensor.passed:
+            raise ValueError("export_parity.status cannot be 'passed' while raw_tensor.passed is false")
+        if not self.detections.matched:
+            raise ValueError("export_parity.status cannot be 'passed' while detections.matched is false")
+        if self.detections.ref_count < 1 or self.detections.ort_count < 1:
+            raise ValueError(
+                "export_parity.status cannot be 'passed' with empty detections "
+                f"(ref_count={self.detections.ref_count}, ort_count={self.detections.ort_count}): "
+                "an empty comparison does not verify coordinate recovery"
+            )
+        if self.detections.ref_count != self.detections.ort_count:
+            raise ValueError("export_parity.status cannot be 'passed' with mismatched detection counts")
+        if self.self_test is None:
+            raise ValueError(
+                "export_parity.status cannot be 'passed' without a self_test: a parity result "
+                "that never demonstrated it can see a coordinate difference proves nothing"
+            )
+        if not self.self_test.detected_perturbation:
+            raise ValueError(
+                "export_parity.status cannot be 'passed' when the self-test failed to detect a "
+                f"{self.self_test.perturbation_px}px coordinate perturbation: the comparison "
+                "cannot see coordinate errors and is vacuous"
+            )
+        return self
+
+
+class TargetBenchmark(BaseContractModel):
+    """Target-machine performance measurement bound to a concrete environment.
+
+    The environment binding is mandatory: a latency number without OS, architecture,
+    runtime version and device cannot be re-derived or compared, and the contract
+    forbids declaring support for an unmeasured profile.
+    """
+
+    os_name: str = Field(..., min_length=1)
+    os_version: str = Field(..., min_length=1)
+    architecture: str = Field(..., min_length=1)
+    device: str = Field(..., min_length=1)
+    runtime: str = Field(..., min_length=1)
+    runtime_version: str = Field(..., min_length=1)
+    provider: str = Field(..., min_length=1)
+    providers_used: List[str] = Field(..., min_length=1)
+    requested_providers: List[str] = Field(..., min_length=1)
+    warmup_runs: int = Field(..., ge=0)
+    benchmark_runs: int = Field(..., gt=0)
+    latency_ms_p50: float = Field(..., gt=0.0)
+    latency_ms_p95: float = Field(..., gt=0.0)
+    latency_ms_mean: float = Field(..., gt=0.0)
+    peak_memory_bytes: int = Field(..., gt=0)
+    input_reference: str = Field(..., min_length=1)
+    inference_config: InferenceConfig
+    extensions: Optional[Dict[str, Any]] = None
+
+
+class GateCheck(BaseContractModel):
+    """Single threshold evaluation inside a release gate decision.
+
+    `direction` decides whether the metric must meet a lower or an upper bound, so
+    latency-style ceilings live in the same explicit policy as quality floors.
+    """
+
+    metric: str = Field(..., min_length=1)
+    threshold: float
+    actual: float
+    passed: bool
+    direction: Literal["min", "max"] = "min"
+    class_id: Optional[str] = None
+
+
+class GateSection(BaseContractModel):
+    """Release gate decision derived from an explicitly configured policy.
+
+    Thresholds live in the policy, never in code defaults, and `status` must agree
+    with the recorded checks.
+    """
+
+    policy_id: str = Field(..., min_length=1)
+    policy_sha256: str = Field(...)
+    status: Literal["passed", "failed"]
+    checks: List[GateCheck] = Field(..., min_length=1)
+    extensions: Optional[Dict[str, Any]] = None
+
+    @field_validator("policy_sha256")
+    @classmethod
+    def check_sha256(cls, v: str) -> str:
+        if not is_valid_sha256(v):
+            raise ValueError(f"Invalid gate policy SHA-256: {v}")
+        if v == "0" * 64:
+            raise ValueError("gate.policy_sha256 must be a real digest of the policy document, not a placeholder")
+        return v
+
+    @model_validator(mode="after")
+    def check_status_matches_checks(self) -> "GateSection":
+        all_passed = all(c.passed for c in self.checks)
+        expected = "passed" if all_passed else "failed"
+        if self.status != expected:
+            raise ValueError(
+                f"gate.status is '{self.status}' but recorded checks imply '{expected}'"
+            )
+        for check in self.checks:
+            check_passed = (
+                check.actual >= check.threshold if check.direction == "min" else check.actual <= check.threshold
+            )
+            if check.passed != check_passed:
+                raise ValueError(
+                    f"gate check '{check.metric}' (class={check.class_id}) records passed="
+                    f"{check.passed} but actual={check.actual} vs threshold={check.threshold} "
+                    "implies passed=" + str(check_passed)
+                )
+        return self
+
+
 class EvaluationReport(BaseContractModel):
-    """Independent evaluation report (evaluation.json)."""
+    """Independent evaluation report (evaluation.json).
+
+    val / locked test / export parity / target performance stay in separate sections
+    and are never collapsed into a single score.
+    """
 
     schema_version: str = Field(..., pattern=r"^\d+\.\d+\.\d+$")
     run_id: str = Field(..., min_length=1)
     dataset: DatasetRef
-    test: Dict[str, Any]
-    export_parity: Dict[str, Any]
-    target_benchmarks: List[Dict[str, Any]]
-    gate: Dict[str, Any]
+    test: TestEvaluationSection
+    export_parity: ExportParitySection
+    target_benchmarks: List[TargetBenchmark] = Field(default_factory=list)
+    gate: GateSection
     extensions: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def check_gate_actuals_match_measurements(self) -> "EvaluationReport":
+        """A gate check must report the number the report actually measured.
+
+        `gate.checks[].actual` is a restatement of a measurement, not an independent
+        observation. Allowing the two to differ means a document can keep its headline
+        mAP low while its gate records a passing actual (or the reverse), which makes the
+        recorded verdict meaningless without anyone noticing. Re-deriving the verdict from
+        an operator policy (`release.publisher`) still cannot catch a report whose
+        *measurements* were rewritten, so this closes the half of the forgery that is
+        detectable from the document alone.
+        """
+        measured = {"mAP50": self.test.mAP50, "mAP50_95": self.test.mAP50_95}
+        for check in self.gate.checks:
+            if check.class_id is not None:
+                continue
+            expected = measured.get(check.metric)
+            if expected is not None and abs(check.actual - expected) > 1e-9:
+                raise ValueError(
+                    f"gate check '{check.metric}' records actual={check.actual} but the test "
+                    f"section measured {expected}; a gate must restate the measurement it "
+                    "is gating on, not a separate number"
+                )
+        return self

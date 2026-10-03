@@ -18,27 +18,30 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "type": "string",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+      "$ref": "#/$defs/schemaVersion"
     },
-    "run_id": {"type": "string", "minLength": 1},
-    "experiment_id": {"type": "string", "minLength": 1},
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "experiment_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "status": {
       "type": "string",
-      "enum": ["succeeded", "failed", "timeout", "cancelled"]
+      "enum": [
+        "succeeded",
+        "failed",
+        "timeout",
+        "cancelled"
+      ]
     },
     "dataset": {
-      "type": "object",
-      "required": ["dataset_id", "manifest_sha256"],
-      "additionalProperties": false,
-      "properties": {
-        "dataset_id": {"type": "string", "minLength": 1},
-        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-      }
+      "$ref": "#/$defs/datasetRef"
     },
     "effective_config_sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
+      "$ref": "#/$defs/sha256"
     },
     "environment": {
       "type": "object"
@@ -50,24 +53,93 @@
     "artifacts": {
       "type": "object",
       "additionalProperties": {
-        "type": "object",
-        "required": ["path", "sha256"],
-        "additionalProperties": false,
-        "properties": {
-          "path": {"type": "string", "minLength": 1},
-          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-        }
+        "$ref": "#/$defs/fileRef"
       }
     },
     "diagnostics": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "val_metrics": {
       "type": "object"
     },
     "extensions": {
       "type": "object"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\])(?![A-Za-z]:[\\\\/])(?!\\.\\.(?:[/\\\\]|$))(?![\\s\\S]*[\\x00-\\x1f])(?!.*(?:[/\\\\]|^)\\.\\.(?:[/\\\\]|$))[^\\x00-\\x1f]+$",
+      "description": "Relative path inside the package. Absolute paths, drive letters, UNC and any '..' segment are rejected structurally."
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "RFC 3339 timestamp in UTC ('Z' suffix required per 00-overall-architecture.md 3.6)"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "SemVer"
+    },
+    "fileRef": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "datasetRef": {
+      "type": "object",
+      "required": [
+        "dataset_id",
+        "manifest_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dataset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "dimension": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Declared dynamic dimension name"
+        }
+      ]
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
     }
   }
 }
