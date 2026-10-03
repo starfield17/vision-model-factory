@@ -10,8 +10,7 @@ export layer verifies from the graph itself.
 import resource
 import sys
 import time
-from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Dict, List
 
 import numpy as np
 import onnxruntime as ort
@@ -91,31 +90,9 @@ def _peak_rss_bytes() -> int:
     return int(peak_kb) * _RUSAGE_KB_TO_BYTES
 
 
-def benchmark_onnx_model(
-    onnx_path: Union[str, Path],
-    input_shape: tuple = (1, 3, 640, 640),
-    warmup_runs: int = 10,
-    benchmark_runs: int = 50,
-) -> Dict[str, Any]:
-    """Convenience wrapper: open a CPU session and return latency percentiles."""
-    session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    rng = np.random.default_rng(42)
-    dummy = rng.uniform(0.0, 1.0, size=input_shape).astype(np.float32)
-    timing = benchmark_inference_session(
-        session, dummy, warmup_runs=warmup_runs, benchmark_runs=benchmark_runs
-    )
-    return {
-        "provider": session.get_providers()[0],
-        "warmup_runs": warmup_runs,
-        "benchmark_runs": benchmark_runs,
-        **timing,
-    }
-
-
 __all__ = [
     "CalibrationSourceError",
     "benchmark_inference_session",
-    "benchmark_onnx_model",
     "measure_peak_memory_bytes",
     "validate_calibration_samples",
 ]

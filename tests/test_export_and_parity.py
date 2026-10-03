@@ -20,7 +20,7 @@ from vision_model_factory.export.parity import (
     match_detection_sets,
     perturb_detections,
 )
-from vision_model_factory.export.quantization import benchmark_onnx_model, validate_calibration_samples
+from vision_model_factory.export.quantization import benchmark_inference_session, validate_calibration_samples
 from vision_model_factory.trainers.yolo import TinyYoloMockNet
 
 CLASS_MAP = [ClassMapItem(index=0, class_id="bottle"), ClassMapItem(index=1, class_id="can")]
@@ -126,9 +126,18 @@ def test_export_and_parity_verification(tmp_path: Path):
     section = ExportParitySection.model_validate(result)
     assert section.status == "passed"
 
-    bench = benchmark_onnx_model(onnx_file, input_shape=(1, 3, 640, 640), warmup_runs=2, benchmark_runs=5)
+    # The shared timing primitive is exercised directly. The convenience wrapper that used
+    # to sit here opened a session, fed it uniform noise and returned bare percentiles with
+    # no environment binding - a latency number that could not be published, with no
+    # production caller. `evaluation.measure_target_benchmark` is the publishable path.
+    import onnxruntime as ort
+
+    session = ort.InferenceSession(str(onnx_file), providers=["CPUExecutionProvider"])
+    dummy = np.zeros((1, 3, 640, 640), dtype=np.float32)
+    bench = benchmark_inference_session(session, dummy, warmup_runs=2, benchmark_runs=5)
     assert bench["latency_ms_p50"] > 0.0
-    assert bench["latency_ms_p95"] > 0.0
+    assert bench["latency_ms_p95"] >= bench["latency_ms_p50"]
+    assert bench["latency_ms_mean"] > 0.0
 
 
 def test_parity_refuses_inputs_that_produce_no_detections(tmp_path: Path):

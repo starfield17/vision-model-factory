@@ -9,12 +9,10 @@ from vision_model_factory.export.exporter import export_torch_model_to_onnx
 from vision_model_factory.export.parity import check_export_parity
 from vision_model_factory.export.preprocessor import letterbox_rgb_u8_v1
 from vision_model_factory.export.quantization import (
-    benchmark_onnx_model,
     validate_calibration_samples,
 )
 
 __all__ = [
-    "benchmark_onnx_model",
     "check_export_parity",
     "compute_iou_xyxy",
     "export_torch_model_to_onnx",
