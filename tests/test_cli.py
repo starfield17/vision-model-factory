@@ -7,9 +7,10 @@ import sys
 from pathlib import Path
 
 import pytest
-from factories import make_evaluation_report, make_gate_policy
+from factories import make_evaluation_report, make_gate_policy, write_dataset_package
 
 from vision_model_factory.cli import build_parser, main
+from vision_model_factory.contracts.hashing import compute_sha256_file
 from vision_model_factory.contracts.models import model_json
 
 TASK_JSON = {
@@ -56,7 +57,7 @@ def test_cli_validate_dataset(synthetic_dataset_dir: Path, capsys):
     main(["validate-dataset", str(synthetic_dataset_dir)])
     out = capsys.readouterr().out
     assert "ds-test-001" in out
-    assert "Samples: 4" in out
+    assert "Samples: 6" in out
 
 
 def test_cli_validate_dataset_fails_loudly_on_tampered_bytes(synthetic_dataset_dir: Path):
@@ -90,15 +91,23 @@ def _publish_inputs(tmp_path: Path, policy=None):
     task_path = tmp_path / "task.json"
     task_path.write_text(json.dumps(TASK_JSON), encoding="utf-8")
 
-    report = make_evaluation_report(dataset_id="ds-cli-001", manifest_sha256="c" * 64, policy=policy)
+    # A real Data package with a real digest: publication re-validates it, so a placeholder
+    # hash cannot get a publish to run at all.
+    ds_dir = write_dataset_package(tmp_path / "ds_cli", dataset_id="ds-cli-001")
+    report = make_evaluation_report(
+        dataset_id="ds-cli-001",
+        manifest_sha256=compute_sha256_file(ds_dir / "dataset.json"),
+        policy=policy,
+    )
     eval_path = tmp_path / "evaluation.json"
     eval_path.write_text(model_json(report, indent=2), encoding="utf-8")
 
-    return onnx_path, task_path, eval_path, _write_policy(tmp_path / "policy.json", policy), report
+    return (onnx_path, task_path, eval_path,
+            _write_policy(tmp_path / "policy.json", policy), report, ds_dir)
 
 
 def test_cli_publish_then_validate_round_trip(tmp_path: Path, capsys):
-    onnx_path, task_path, eval_path, policy_path, report = _publish_inputs(tmp_path)
+    onnx_path, task_path, eval_path, policy_path, report, ds_dir = _publish_inputs(tmp_path)
     releases = tmp_path / "releases"
 
     main([
@@ -107,8 +116,7 @@ def test_cli_publish_then_validate_round_trip(tmp_path: Path, capsys):
         "--model-path", str(onnx_path),
         "--task-path", str(task_path),
         "--eval-path", str(eval_path),
-        "--dataset-id", "ds-cli-001",
-        "--dataset-manifest-sha", "c" * 64,
+        "--dataset-dir", str(ds_dir),
         "--run-id", report.run_id,
         "--class-map-json", CLASS_MAP_JSON,
         "--gate-policy", str(policy_path),
@@ -126,12 +134,12 @@ def test_cli_publish_then_validate_round_trip(tmp_path: Path, capsys):
 
 
 def test_cli_publish_requires_a_gate_policy(tmp_path: Path, capsys):
-    onnx_path, task_path, eval_path, _policy, report = _publish_inputs(tmp_path)
+    onnx_path, task_path, eval_path, _policy, report, ds_dir = _publish_inputs(tmp_path)
 
     argv = [
         "publish", "--package-id", "model-cli-np", "--model-path", str(onnx_path),
         "--task-path", str(task_path), "--eval-path", str(eval_path),
-        "--dataset-id", "ds-cli-001", "--dataset-manifest-sha", "c" * 64,
+        "--dataset-dir", str(ds_dir),
         "--run-id", report.run_id, "--class-map-json", CLASS_MAP_JSON,
         "--releases-dir", str(tmp_path / "releases"),
     ]
@@ -152,9 +160,13 @@ def test_cli_publish_refuses_a_failing_gate(tmp_path: Path, capsys):
                                              tmp_path / "model.onnx")
     task_path = tmp_path / "task.json"
     task_path.write_text(json.dumps(TASK_JSON), encoding="utf-8")
+    ds_dir = write_dataset_package(tmp_path / "ds_cli", dataset_id="ds-cli-001")
 
     report = make_evaluation_report(
-        dataset_id="ds-cli-001", manifest_sha256="c" * 64, mAP50=0.2, mAP50_95=0.1,
+        dataset_id="ds-cli-001",
+        manifest_sha256=compute_sha256_file(ds_dir / "dataset.json"),
+        mAP50=0.2,
+        mAP50_95=0.1,
         policy=make_gate_policy(policy_id="cli-strict"),
     )
     eval_path = tmp_path / "evaluation.json"
@@ -168,7 +180,7 @@ def test_cli_publish_refuses_a_failing_gate(tmp_path: Path, capsys):
         main([
             "publish", "--package-id", "model-cli-bad", "--model-path", str(onnx_path),
             "--task-path", str(task_path), "--eval-path", str(eval_path),
-            "--dataset-id", "ds-cli-001", "--dataset-manifest-sha", "c" * 64,
+            "--dataset-dir", str(ds_dir),
             "--run-id", report.run_id, "--class-map-json", CLASS_MAP_JSON,
             "--gate-policy", str(policy_path), "--releases-dir", str(tmp_path / "releases"),
         ])
@@ -289,7 +301,10 @@ class TestPipelineScenario:
         (ds / "task.json").write_text(json.dumps(TASK_JSON), encoding="utf-8")
 
         layout = [("s-1", "train", "bottle"), ("s-2", "val", "can"),
-                  ("s-3", "test", "bottle"), ("s-4", "test", "can")]
+                  ("s-3", "test", "bottle"), ("s-4", "test", "can"),
+                  # Audit samples carry no annotations: parity compares two predictors on
+                  # image bytes and consumes no labels, so this is the corpus built for it.
+                  ("s-5", "audit", None), ("s-6", "audit", None)]
         shas = {}
         for i, (sid, split, _cls) in enumerate(layout):
             img_path = ds / "images" / f"{sid}.jpg"
@@ -312,14 +327,14 @@ class TestPipelineScenario:
             {"annotation_id": f"a{i}", "sample_id": sid, "class_id": cls,
              "bbox_xyxy": [100.0, 120.0, 500.0, 300.0], "origin": "human",
              "annotator_run_id": "run-ann", "review_state": "human_verified", "score": 1.0}
-            for i, (sid, _split, cls) in enumerate(layout)
+            for i, (sid, _split, cls) in enumerate(layout) if cls is not None
         ]
         (ds / "annotations.jsonl").write_text(
             "\n".join(json.dumps(a) for a in anns) + "\n", encoding="utf-8"
         )
         (ds / "quality.json").write_text(
             json.dumps({"schema_version": "1.0.0", "annotation_runs": [], "reviewer_runs": [],
-                        "audit": {"sample_count": 4}, "gate": {"status": "passed"}}),
+                        "audit": {"sample_count": 6}, "gate": {"status": "passed"}}),
             encoding="utf-8",
         )
         (ds / "dataset.json").write_text(
@@ -373,6 +388,7 @@ class TestPipelineScenario:
             "--task-json", str(ds / "task.json"),
             "--run-id", "run-e2e",
             "--class-map-json", CLASS_MAP_JSON,
+            "--parity-split", "audit",
             "--parity-samples", "2",
             "--benchmark-runs", "3",
             "--output", str(eval_out),
@@ -406,8 +422,7 @@ class TestPipelineScenario:
             main([
                 "publish", "--package-id", "model-e2e-blocked", "--model-path", str(onnx_path),
                 "--task-path", str(ds / "task.json"), "--eval-path", str(eval_out),
-                "--dataset-id", "ds-e2e",
-                "--dataset-manifest-sha", str(report["dataset"]["manifest_sha256"]),
+                "--dataset-dir", str(ds),
                 "--run-id", "run-e2e", "--class-map-json", CLASS_MAP_JSON,
                 "--gate-policy", str(parity_required), "--releases-dir", str(releases),
             ])
@@ -416,8 +431,7 @@ class TestPipelineScenario:
         main([
             "publish", "--package-id", "model-e2e-001", "--model-path", str(onnx_path),
             "--task-path", str(ds / "task.json"), "--eval-path", str(eval_out),
-            "--dataset-id", "ds-e2e",
-            "--dataset-manifest-sha", str(report["dataset"]["manifest_sha256"]),
+            "--dataset-dir", str(ds),
             "--run-id", "run-e2e", "--class-map-json", CLASS_MAP_JSON,
             "--gate-policy", str(policy_path), "--releases-dir", str(releases),
         ])
@@ -444,7 +458,8 @@ class TestPipelineScenario:
             main([
                 "evaluate", str(ds), str(onnx_path), str(strict),
                 "--task-json", str(ds / "task.json"), "--run-id", "run-np",
-                "--class-map-json", CLASS_MAP_JSON, "--parity-samples", "2",
+                "--class-map-json", CLASS_MAP_JSON,
+                "--parity-split", "audit", "--parity-samples", "2",
                 "--benchmark-runs", "2", "--output", str(tmp_path / "e.json"),
             ])
         assert exit_info.value.code == 1
@@ -481,7 +496,8 @@ class TestPipelineScenario:
             main([
                 "evaluate", str(ds), str(onnx_path), str(policy_path),
                 "--task-json", str(task3), "--run-id", "run-bad",
-                "--class-map-json", three_classes, "--parity-samples", "2",
+                "--class-map-json", three_classes,
+                "--parity-split", "audit", "--parity-samples", "2",
                 "--benchmark-runs", "1",
             ])
         assert "channels" in str(exit_info.value.args[0]) or "channels" in capsys.readouterr().err

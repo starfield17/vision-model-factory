@@ -2,9 +2,17 @@
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import pytest
-from factories import DEFAULT_CONFIG, make_evaluation_report, make_gate_policy, make_parity_section
+from factories import (
+    DEFAULT_CONFIG,
+    DEFAULT_TASK_SPEC,
+    make_evaluation_report,
+    make_gate_policy,
+    make_parity_section,
+    write_dataset_package,
+)
 
 from vision_model_factory.contracts.gate_policy import policy_sha256
 from vision_model_factory.contracts.hashing import compute_sha256_file
@@ -15,7 +23,11 @@ from vision_model_factory.contracts.models import (
     PostprocessSpec,
     model_json,
 )
-from vision_model_factory.contracts.validators import ValidationError, validate_model_package
+from vision_model_factory.contracts.validators import (
+    ValidationError,
+    validate_dataset_package,
+    validate_model_package,
+)
 from vision_model_factory.export.exporter import export_torch_model_to_onnx
 from vision_model_factory.release.publisher import ReleasePublicationError, publish_model_package
 from vision_model_factory.release.registry import ModelRegistry
@@ -49,6 +61,8 @@ def _publish(
     policy=None,
     omit_gate_policy: bool = False,
     releases_dir: Path = None,
+    dataset_dir: Optional[Path] = None,
+    dataset_ref: Optional[DatasetRef] = None,
     postprocess: PostprocessSpec = None,
     class_map=None,
     onnx_path: Path = None,
@@ -60,6 +74,31 @@ def _publish(
     differently-sized export, for instance) and have the publisher read those bytes.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Publication re-validates the data package it cites, so the default is a real package
+    # with a real digest. `DATASET_REF` stays available for the tests that assert a refusal
+    # when the cited dataset does not match the one supplied.
+    if dataset_dir is None:
+        dataset_dir = write_dataset_package(work_dir / "dataset_pkg")
+    if dataset_ref is None:
+        manifest, _task, _samples, _anns = validate_dataset_package(dataset_dir)
+        dataset_ref = DatasetRef(
+            dataset_id=manifest.dataset_id,
+            manifest_sha256=compute_sha256_file(dataset_dir / "dataset.json"),
+        )
+    # The report must describe the data it was actually scored on. A test that passes its
+    # own report is exercising something else (gate verdicts, parity, digests), so its
+    # placeholder dataset identity is re-pointed at this package; the identity agreement
+    # rule itself is asserted directly by test_publication_refuses_a_report_of_other_data.
+    if report is not None and report.dataset.manifest_sha256 == DATASET_REF.manifest_sha256:
+        report = report.model_copy(
+            update={"dataset": dataset_ref},
+        )
+    elif report is None:
+        report = make_evaluation_report(
+            dataset_id=dataset_ref.dataset_id, manifest_sha256=dataset_ref.manifest_sha256
+        )
+
     if onnx_path is None:
         model = TinyYoloMockNet(num_classes=len(class_map or CLASS_MAP), num_anchors=num_anchors)
         onnx_path, _ = export_torch_model_to_onnx(model, work_dir / "model.onnx")
@@ -74,7 +113,8 @@ def _publish(
         model_onnx_path=onnx_path,
         task_json_path=task_path,
         evaluation_json_path=eval_path,
-        dataset_ref=DATASET_REF,
+        dataset_ref=dataset_ref,
+        dataset_dir=dataset_dir,
         run_id=report.run_id,
         class_map=class_map or CLASS_MAP,
         releases_dir=releases_dir or (work_dir / "releases"),
@@ -237,7 +277,9 @@ def test_parity_measured_at_other_thresholds_is_refused(tmp_path: Path):
     assert pub_dir.is_dir()
 
 
-def test_publish_refuses_a_graph_whose_output_disagrees_with_the_class_map(tmp_path: Path):
+def test_publish_refuses_a_graph_whose_output_disagrees_with_the_class_map(
+    tmp_path: Path, synthetic_dataset_dir: Path
+):
     """A 6-channel graph cannot be published under a declaration of 4 classes."""
     three_classes = CLASS_MAP + [ClassMapItem(index=2, class_id="lid")]
     task = tmp_path / "task3.json"
@@ -255,7 +297,14 @@ def test_publish_refuses_a_graph_whose_output_disagrees_with_the_class_map(tmp_p
             }
         )
     )
-    report = make_evaluation_report()
+    # Cite the fixture package consistently: this test's subject is the class-map/graph
+    # disagreement, not the dataset identity check.
+    consistent_ref = DatasetRef(
+        dataset_id="ds-test-001",
+        manifest_sha256=compute_sha256_file(synthetic_dataset_dir / "dataset.json"),
+    )
+    report = make_evaluation_report(dataset_id="ds-test-001",
+                                    manifest_sha256=consistent_ref.manifest_sha256)
     eval_path = tmp_path / "evaluation.json"
     eval_path.write_text(model_json(report, indent=2), encoding="utf-8")
 
@@ -268,7 +317,8 @@ def test_publish_refuses_a_graph_whose_output_disagrees_with_the_class_map(tmp_p
             model_onnx_path=onnx_path,
             task_json_path=task,
             evaluation_json_path=eval_path,
-            dataset_ref=DATASET_REF,
+            dataset_ref=consistent_ref,
+            dataset_dir=synthetic_dataset_dir,
             run_id=report.run_id,
             class_map=three_classes,
             releases_dir=tmp_path / "rel",
@@ -277,7 +327,7 @@ def test_publish_refuses_a_graph_whose_output_disagrees_with_the_class_map(tmp_p
     assert not (tmp_path / "rel" / "model-channel-mismatch").exists()
 
 
-def test_publish_refuses_an_evaluation_report_from_another_run(tmp_path: Path):
+def test_publish_refuses_an_evaluation_report_from_another_run(tmp_path: Path, synthetic_dataset_dir: Path):
     report = make_evaluation_report(run_id="run-other")
     model = TinyYoloMockNet(num_classes=2, num_anchors=10)
     onnx_path, _ = export_torch_model_to_onnx(model, tmp_path / "model.onnx")
@@ -291,6 +341,7 @@ def test_publish_refuses_an_evaluation_report_from_another_run(tmp_path: Path):
             task_json_path=_write_task(tmp_path / "task.json"),
             evaluation_json_path=eval_path,
             dataset_ref=DATASET_REF,
+            dataset_dir=synthetic_dataset_dir,
             run_id="run-001",
             class_map=CLASS_MAP,
             releases_dir=tmp_path / "rel",
@@ -358,3 +409,162 @@ def test_publication_digests_describe_the_promoted_bytes(tmp_path: Path):
         target = pub_dir / ref.path
         assert target.is_file()
         assert compute_sha256_file(target) == ref.sha256
+
+
+def _republish_manifest(ds_dir: Path) -> None:
+    """Rewrite dataset.json so its digests describe the tampered files.
+
+    Without this the test would only prove a stale digest is caught; with it the package is
+    internally consistent and *still* unsound, which is the case digest checks cannot see.
+    """
+    import json as _json
+
+    manifest = _json.loads((ds_dir / "dataset.json").read_text(encoding="utf-8"))
+    for key in ("samples", "annotations"):
+        manifest[key]["sha256"] = compute_sha256_file(ds_dir / f"{key}.jsonl")
+    (ds_dir / "dataset.json").write_text(_json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def test_publication_refuses_a_dataset_that_is_not_what_the_package_cites(
+    tmp_path: Path, synthetic_dataset_dir: Path
+):
+    """A5: digest agreement between report and manifest is not data soundness.
+
+    Release 001 was published over a dataset with identical image bytes crossing splits.
+    Every digest in that chain matched, because digests only prove the artifacts agree with
+    each other - none of them re-reads the data. Publication now re-validates the package
+    and refuses a directory whose dataset identity differs from the one being cited.
+    """
+    report = make_evaluation_report(
+        dataset_id="ds-test-001",
+        manifest_sha256=compute_sha256_file(synthetic_dataset_dir / "dataset.json"),
+    )
+    eval_path = tmp_path / "evaluation.json"
+    eval_path.write_text(model_json(report, indent=2), encoding="utf-8")
+    model = TinyYoloMockNet(num_classes=2, num_anchors=10)
+    onnx_path, _ = export_torch_model_to_onnx(model, tmp_path / "model.onnx")
+
+    # The report and the package must name the same dataset; here the package cites a
+    # dataset id the report was not produced from.
+    with pytest.raises(ReleasePublicationError, match="package claims dataset 'ds-other'"):
+        publish_model_package(
+            package_id="model-wrong-data",
+            model_onnx_path=onnx_path,
+            task_json_path=_write_task(tmp_path / "task.json"),
+            evaluation_json_path=eval_path,
+            dataset_ref=DatasetRef(dataset_id="ds-other", manifest_sha256="b" * 64),
+            dataset_dir=synthetic_dataset_dir,
+            run_id=report.run_id,
+            class_map=CLASS_MAP,
+            releases_dir=tmp_path / "rel",
+            gate_policy=make_gate_policy(),
+        )
+
+    # Report and package agree with each other, but the directory handed over is different
+    # bytes. This is the gap release 001 slipped through: mutual digest agreement proves
+    # nothing about the data itself, so the validated directory must be the cited one.
+    # A genuinely different package: the default builder is deterministic, so a second
+    # call with the same task spec would produce identical bytes and an identical digest,
+    # and this sub-case would prove nothing.
+    other_dir = write_dataset_package(
+        tmp_path / "other_ds",
+        task_spec={
+            **DEFAULT_TASK_SPEC,
+            "task_id": "test-task-002",
+            "categories": [
+                {"class_id": "bottle", "display_name": "Bottle", "prompt": "bottle"},
+                {"class_id": "can", "display_name": "Can", "prompt": "can"},
+                {"class_id": "crate", "display_name": "Crate", "prompt": "crate"},
+            ],
+        },
+    )
+    other_sha = compute_sha256_file(other_dir / "dataset.json")
+    agreeing_report = make_evaluation_report(dataset_id="ds-test-001", manifest_sha256=other_sha)
+    agreeing_eval = tmp_path / "evaluation-agreeing.json"
+    agreeing_eval.write_text(model_json(agreeing_report, indent=2), encoding="utf-8")
+    with pytest.raises(ReleasePublicationError, match="hashes to"):
+        publish_model_package(
+            package_id="model-agreeing-but-other-bytes",
+            model_onnx_path=onnx_path,
+            task_json_path=_write_task(tmp_path / "task.json"),
+            evaluation_json_path=agreeing_eval,
+            dataset_ref=DatasetRef(dataset_id="ds-test-001", manifest_sha256=other_sha),
+            dataset_dir=synthetic_dataset_dir,
+            run_id=agreeing_report.run_id,
+            class_map=CLASS_MAP,
+            releases_dir=tmp_path / "rel",
+            gate_policy=make_gate_policy(),
+        )
+    assert not (tmp_path / "rel" / "model-agreeing-but-other-bytes").exists()
+
+    # A correct id with a stale digest is refused too.
+    with pytest.raises(ReleasePublicationError, match="hashes to"):
+        publish_model_package(
+            package_id="model-stale-digest",
+            model_onnx_path=onnx_path,
+            task_json_path=_write_task(tmp_path / "task.json"),
+            evaluation_json_path=eval_path,
+            dataset_ref=DatasetRef(dataset_id="ds-test-001", manifest_sha256="b" * 64),
+            dataset_dir=synthetic_dataset_dir,
+            run_id=report.run_id,
+            class_map=CLASS_MAP,
+            releases_dir=tmp_path / "rel",
+            gate_policy=make_gate_policy(),
+        )
+    assert not (tmp_path / "rel" / "model-wrong-data").exists()
+
+
+def test_publication_refuses_a_leaking_dataset_even_when_every_digest_matches(tmp_path: Path):
+    """The exact failure that blocked release 001, reproduced on a package.
+
+    Identical image bytes across splits make the evaluation meaningless, yet every artifact
+    can still agree with every other. Re-validation must stop the release on its own
+    evidence, not because somebody happened to notice.
+    """
+    from factories import write_dataset_package
+
+    ds_dir = write_dataset_package(tmp_path / "leaky_ds")
+    # Make one audit image's bytes identical to a test image's, exactly as the shipped
+    # package does, and update the sample record to describe those bytes. The record and
+    # the file still agree, so nothing but the cross-split rule can see the duplication.
+    victim = ds_dir / "images" / "img3.jpg"
+    dup = ds_dir / "images" / "img5.jpg"
+    dup.write_bytes(victim.read_bytes())
+    rows = [json.loads(line) for line in
+            (ds_dir / "samples.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    for row in rows:
+        if row["sample_id"] == "s-005":
+            row["file"]["sha256"] = compute_sha256_file(dup)
+    with (ds_dir / "samples.jsonl").open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    _republish_manifest(ds_dir)
+
+    with pytest.raises(ValidationError, match="Identical image bytes cross splits"):
+        validate_dataset_package(ds_dir)
+
+    report = make_evaluation_report(
+        dataset_id="ds-test-001", manifest_sha256=compute_sha256_file(ds_dir / "dataset.json")
+    )
+    eval_path = tmp_path / "evaluation.json"
+    eval_path.write_text(model_json(report, indent=2), encoding="utf-8")
+    model = TinyYoloMockNet(num_classes=2, num_anchors=10)
+    onnx_path, _ = export_torch_model_to_onnx(model, tmp_path / "model.onnx")
+
+    with pytest.raises(ValidationError, match="Identical image bytes cross splits"):
+        publish_model_package(
+            package_id="model-leaky",
+            model_onnx_path=onnx_path,
+            task_json_path=_write_task(tmp_path / "task.json"),
+            evaluation_json_path=eval_path,
+            dataset_ref=DatasetRef(
+                dataset_id="ds-test-001",
+                manifest_sha256=compute_sha256_file(ds_dir / "dataset.json"),
+            ),
+            dataset_dir=ds_dir,
+            run_id=report.run_id,
+            class_map=CLASS_MAP,
+            releases_dir=tmp_path / "rel",
+            gate_policy=make_gate_policy(),
+        )
+    assert not (tmp_path / "rel" / "model-leaky").exists()

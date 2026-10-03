@@ -373,9 +373,17 @@ class ParityTolerances(BaseContractModel):
 
 
 class ParityTensorComparison(BaseContractModel):
-    """Raw output tensor difference between reference and exported model."""
+    """Raw output tensor difference between reference and exported model.
+
+    `max_rel_diff` is the absolute difference normalised by max(1.0, |reference|). It is
+    recorded because a single absolute tolerance is not scale-coherent across a tensor that
+    carries pixel-space coordinates and class scores together: the absolute figure alone can
+    fail on two graphs that compute the same function, and the relative figure is what shows
+    that. Thresholds are not derived from it here.
+    """
 
     max_abs_diff: float = Field(..., ge=0.0)
+    max_rel_diff: float = Field(..., ge=0.0)
     mean_abs_diff: float = Field(..., ge=0.0)
     passed: bool
 
@@ -413,6 +421,12 @@ class ExportParitySection(BaseContractModel):
     status: Literal["passed", "failed"]
     method: str = Field(..., min_length=1)
     input_reference: str = Field(..., min_length=1)
+    # `test` is absent from the type on purpose. Parity compares a reference
+    # implementation against the exported graph, so it needs real image bytes but
+    # consumes no annotations and measures no quality. Spending the locked test corpus
+    # on it would mean the scored set had also been used to validate the artifact, so a
+    # parity pass citing it is made unrepresentable rather than discouraged.
+    parity_split: Optional[Literal["train", "val", "audit"]] = None
     matching_method: str = Field(..., min_length=1)
     tolerances: ParityTolerances
     raw_tensor: ParityTensorComparison
@@ -450,6 +464,12 @@ class ExportParitySection(BaseContractModel):
                 "export_parity.status cannot be 'passed' when the self-test failed to detect a "
                 f"{self.self_test.perturbation_px}px coordinate perturbation: the comparison "
                 "cannot see coordinate errors and is vacuous"
+            )
+        if self.parity_split is None:
+            raise ValueError(
+                "export_parity.status cannot be 'passed' without recording which split the "
+                "parity corpus came from: an unattributed corpus cannot be audited for "
+                "locked-test-set consumption"
             )
         return self
 

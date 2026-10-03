@@ -43,14 +43,18 @@ def compute_dataset_manifest_sha(dataset_dir: Path) -> str:
 
 
 def parity_not_measured(config: InferenceConfig) -> ExportParitySection:
-    """A structurally valid ExportParitySection that records "parity was not run"."""
+    """A structurally valid ExportParitySection that records "parity was not run".
+
+    `parity_split` stays absent because no corpus was consumed: claiming a split for a
+    comparison that never happened would attribute evidence to data it never touched.
+    """
     return ExportParitySection(
         status="failed",
         method="not_run",
         input_reference="none",
         matching_method="none",
         tolerances={"tensor_atol": 0.0, "score_atol": 0.0, "box_atol": 0.0},
-        raw_tensor={"max_abs_diff": 0.0, "mean_abs_diff": 0.0, "passed": False},
+        raw_tensor={"max_abs_diff": 0.0, "max_rel_diff": 0.0, "mean_abs_diff": 0.0, "passed": False},
         detections={
             "ref_count": 0,
             "ort_count": 0,
@@ -58,6 +62,7 @@ def parity_not_measured(config: InferenceConfig) -> ExportParitySection:
             "max_score_diff": 0.0,
             "max_box_diff": 0.0,
         },
+        exceptions=["parity was not attempted: no reference model was supplied"],
         inference_config=config,
     )
 

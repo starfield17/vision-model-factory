@@ -230,6 +230,7 @@
       "type": "object",
       "required": [
         "max_abs_diff",
+        "max_rel_diff",
         "mean_abs_diff",
         "passed"
       ],
@@ -245,6 +246,11 @@
         },
         "passed": {
           "type": "boolean"
+        },
+        "max_rel_diff": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Absolute difference normalised by max(1.0, |reference|); recorded because one absolute tolerance is not scale-coherent across pixel coordinates and class scores."
         }
       }
     },
@@ -309,6 +315,19 @@
           "type": "string",
           "minLength": 1
         },
+        "parity_split": {
+          "description": "Split the parity corpus came from. 'test' is deliberately unrepresentable: parity consumes no annotations, so spending the locked scored corpus on an artifact check would make 'test was touched once' unverifiable.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "train",
+            "val",
+            "audit",
+            null
+          ]
+        },
         "matching_method": {
           "type": "string",
           "minLength": 1
@@ -353,9 +372,17 @@
           },
           "then": {
             "required": [
-              "self_test"
+              "self_test",
+              "parity_split"
             ],
             "properties": {
+              "parity_split": {
+                "enum": [
+                  "train",
+                  "val",
+                  "audit"
+                ]
+              },
               "raw_tensor": {
                 "properties": {
                   "passed": {
@@ -385,7 +412,7 @@
           }
         }
       ],
-      "description": "Export parity evidence. A 'passed' status is structurally impossible without non-empty detections on both sides and a self-test that detected the injected perturbation: an empty comparison verifies nothing about coordinate recovery."
+      "description": "Export parity evidence. A 'passed' status is structurally impossible without non-empty detections on both sides, a self-test that detected the injected perturbation, and a recorded parity split: an empty comparison verifies nothing and the locked test corpus may not be spent on an artifact check."
     },
     "targetBenchmark": {
       "type": "object",

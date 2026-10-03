@@ -32,6 +32,7 @@ from vision_model_factory.contracts.models import (
 )
 from vision_model_factory.contracts.validators import (
     ValidationError,
+    validate_dataset_package,
     validate_model_package,
 )
 from vision_model_factory.export.graph_inspection import describe_onnx_graph, infer_precision
@@ -57,6 +58,7 @@ def publish_model_package(
     task_json_path: Path,
     evaluation_json_path: Path,
     dataset_ref: DatasetRef,
+    dataset_dir: Path,
     run_id: str,
     class_map: List[ClassMapItem],
     releases_dir: Path,
@@ -65,6 +67,13 @@ def publish_model_package(
     gate_policy: Optional[GatePolicy] = None,
 ) -> Tuple[Path, ModelManifest]:
     """Publish an immutable Model Package atomically.
+
+    Publication requires `dataset_dir`: the Data-owned package the model claims to come
+    from. Publication re-validates it, because a digest match only proves the evaluation
+    report and the manifest agree with each other - both could describe a dataset that is
+    not internally sound. The dataset that shipped release 001 has identical image bytes
+    crossing train/val/test; digest agreement could not have seen that, and re-validation
+    can. An optional argument would let a caller skip the guarantee, so it is required.
 
     Publication requires `gate_policy`: the operator's threshold document. The recorded
     gate in `evaluation.json` is re-derived from that policy and must agree exactly - same
@@ -123,6 +132,20 @@ def publish_model_package(
             raise ReleasePublicationError(
                 f"evaluation.json describes dataset '{eval_report.dataset.dataset_id}' but package "
                 f"claims dataset '{dataset_ref.dataset_id}'."
+            )
+        # Re-validate the Data package itself, and prove it is the one being claimed.
+        dataset_manifest, _task_spec, _samples, _annotations = validate_dataset_package(dataset_dir)
+        claimed_sha = compute_sha256_file(Path(dataset_dir) / "dataset.json")
+        if dataset_manifest.dataset_id != dataset_ref.dataset_id:
+            raise ReleasePublicationError(
+                f"Dataset package at {dataset_dir} is '{dataset_manifest.dataset_id}' but the "
+                f"package claims '{dataset_ref.dataset_id}'."
+            )
+        if claimed_sha != dataset_ref.manifest_sha256:
+            raise ReleasePublicationError(
+                f"Dataset package {dataset_dir}/dataset.json hashes to {claimed_sha}, not the "
+                f"{dataset_ref.manifest_sha256} recorded in the package: the released artifact "
+                "would cite a dataset that is not the one validated."
             )
         if eval_report.dataset.manifest_sha256 != dataset_ref.manifest_sha256:
             raise ReleasePublicationError(

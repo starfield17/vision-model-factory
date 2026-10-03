@@ -100,6 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--class-map-json", type=str, required=True, help='e.g. [{"index":0,"class_id":"bottle"}]')
     sb.add_argument("--reference-weights", type=Path, default=None, help="PyTorch weights for parity reference.")
     sb.add_argument(
+        "--parity-split",
+        type=str,
+        choices=["train", "val", "audit"],
+        required=True,
+        help="Corpus export parity is measured on. 'test' is not offered: parity consumes no "
+        "annotations, but spending the locked scored split on an artifact check would make "
+        "'the test set was touched once' unverifiable. No default - the operator names it.",
+    )
+    sb.add_argument(
         "--parity-samples",
         type=int,
         default=5,
@@ -124,8 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
     sb.add_argument("--model-path", type=Path, required=True)
     sb.add_argument("--task-path", type=Path, required=True)
     sb.add_argument("--eval-path", type=Path, required=True)
-    sb.add_argument("--dataset-id", type=str, required=True)
-    sb.add_argument("--dataset-manifest-sha", type=str, required=True)
+    sb.add_argument(
+        "--dataset-dir",
+        type=Path,
+        required=True,
+        help="Immutable Dataset Package this model came from. Re-validated at publication, "
+        "and the dataset id and manifest digest are read from it instead of being typed in.",
+    )
     sb.add_argument("--run-id", type=str, required=True)
     sb.add_argument("--class-map-json", type=str, required=True)
     sb.add_argument("--gate-policy", type=Path, required=True, help="Publication thresholds.")
@@ -283,12 +297,16 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 
     _manifest, _task, samples, _annotations = validate_dataset_package(args.dataset_dir)
     test_samples = [s for s in samples if s.split == "test"]
-    if len(test_samples) < args.parity_samples:
+    if not test_samples:
+        raise SystemExit("Dataset package contains no 'test' split samples; nothing to score.")
+
+    parity_pool = [s for s in samples if s.split == args.parity_split]
+    if len(parity_pool) < args.parity_samples:
         raise SystemExit(
-            f"Need at least {args.parity_samples} test samples for export parity, "
-            f"found {len(test_samples)}."
+            f"Need at least {args.parity_samples} samples in split '{args.parity_split}' for "
+            f"export parity, found {len(parity_pool)}."
         )
-    parity_samples = test_samples[: args.parity_samples]
+    parity_samples = parity_pool[: args.parity_samples]
 
     predictor = OnnxPackagePredictor(
         class_map=class_map,
@@ -349,7 +367,7 @@ def _describe_check(check) -> str:
 
 
 def _measure_parity(args, class_map, config, parity_samples) -> ExportParitySection:
-    """Compare the exported graph against the PyTorch reference on real test images."""
+    """Compare the exported graph against the PyTorch reference on real images."""
     reference = TorchPackagePredictor(
         class_map=class_map,
         inference_config=config,
@@ -367,6 +385,7 @@ def _measure_parity(args, class_map, config, parity_samples) -> ExportParitySect
         score_threshold=config.score_threshold,
         nms_iou_threshold=config.nms_iou_threshold,
         max_detections=config.max_detections,
+        parity_split=args.parity_split,
     )
     return ExportParitySection.model_validate(report)
 
@@ -478,7 +497,13 @@ def cmd_registry(args: argparse.Namespace) -> None:
 
 
 def cmd_publish(args: argparse.Namespace) -> None:
-    dataset_ref = DatasetRef(dataset_id=args.dataset_id, manifest_sha256=args.dataset_manifest_sha)
+    # The dataset identity is read off the package rather than typed by the operator: two
+    # free-text claims about data are two more things that can disagree with reality.
+    dataset_manifest, _task, _samples, _annotations = validate_dataset_package(args.dataset_dir)
+    dataset_ref = DatasetRef(
+        dataset_id=dataset_manifest.dataset_id,
+        manifest_sha256=compute_sha256_file(args.dataset_dir / "dataset.json"),
+    )
     postprocess = PostprocessSpec(
         score_threshold=args.score_threshold,
         nms_iou_threshold=args.nms_iou_threshold,
@@ -490,6 +515,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
         task_json_path=args.task_path,
         evaluation_json_path=args.eval_path,
         dataset_ref=dataset_ref,
+        dataset_dir=args.dataset_dir,
         run_id=args.run_id,
         class_map=parse_class_map(args.class_map_json),
         releases_dir=args.releases_dir,

@@ -14,7 +14,7 @@ make it meaningful:
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import onnxruntime as ort
@@ -135,6 +135,7 @@ def check_export_parity(
     tensor_atol: float = 1e-2,
     score_atol: float = 1e-3,
     box_atol: float = 1.0,
+    parity_split: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Verify semantic parity between the PyTorch reference and the exported ONNX model.
 
@@ -148,6 +149,27 @@ def check_export_parity(
     dataset_dir = Path(dataset_dir)
     if not samples:
         raise ParityInputError("Parity requires at least one real reference sample.")
+
+    # The split is read off the records actually consumed, never handed down as a label:
+    # a claim about which corpus was spent has to follow from the corpus that was used.
+    used_splits = {s.split for s in samples}
+    if len(used_splits) != 1:
+        raise ParityInputError(
+            f"Parity samples come from mixed splits {sorted(used_splits)}; a single corpus "
+            "must be named so the report can be audited for locked-test-set consumption."
+        )
+    used_split = next(iter(used_splits))
+    if used_split == "test":
+        raise ParityInputError(
+            "Parity was given samples from the locked 'test' split. The scored corpus may "
+            "not be spent validating an artifact, and export_parity.parity_split cannot "
+            "record 'test'. Select a train, val, or audit corpus."
+        )
+    if parity_split is not None and parity_split != used_split:
+        raise ParityInputError(
+            f"Requested parity split '{parity_split}' but the samples provided are from "
+            f"'{used_split}'; the recorded split must match the corpus actually consumed."
+        )
 
     session = ort.InferenceSession(str(onnx_file), providers=["CPUExecutionProvider"])
     # A graph whose output does not depend on its input is pruned to zero inputs by the
@@ -166,6 +188,11 @@ def check_export_parity(
     torch_model.eval()
 
     tensor_max = 0.0
+    # Relative difference, normalised by max(1.0, |reference|). The exported graph emits
+    # pre-NMS pixel coordinates alongside class scores in one tensor, so a single absolute
+    # tolerance mixes a 640-unit scale with a 0-1 scale; the relative figure is what shows
+    # whether the two graphs are the same function up to float reassociation.
+    tensor_max_rel = 0.0
     tensor_mean = 0.0
     tensor_compared = 0
     ref_all: List[Dict[str, Any]] = []
@@ -195,6 +222,8 @@ def check_export_parity(
 
         diff = np.abs(ref_np.astype(np.float64) - ort_np.astype(np.float64))
         tensor_max = max(tensor_max, float(np.max(diff)))
+        denom = np.maximum(np.abs(ref_np.astype(np.float64)), 1.0)
+        tensor_max_rel = max(tensor_max_rel, float(np.max(diff / denom)))
         tensor_mean += float(np.mean(diff))
         tensor_compared += 1
 
@@ -226,6 +255,7 @@ def check_export_parity(
     return {
         "status": "passed" if (tensor_passed and detections_passed and detected_perturbation) else "failed",
         "method": f"pytorch_vs_onnxruntime_cpu/{PARITY_PROTOCOL_ID}",
+        "parity_split": used_split,
         "input_reference": f"dataset:{','.join(used_samples)}:letterbox_rgb_u8_v1",
         "matching_method": PARITY_MATCHING_METHOD,
         "tolerances": {
@@ -235,6 +265,7 @@ def check_export_parity(
         },
         "raw_tensor": {
             "max_abs_diff": tensor_max,
+        "max_rel_diff": tensor_max_rel,
             "mean_abs_diff": mean_tensor,
             "passed": tensor_passed,
         },

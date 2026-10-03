@@ -64,8 +64,16 @@ def test_yolo_dataset_preparation_and_partial_exclusion(synthetic_dataset_dir: P
     yaml_path, stats = adapter.prepare_dataset(synthetic_dataset_dir, work_dir, class_map)
 
     assert yaml_path.is_file()
-    assert stats["excluded_partial_samples"] == 1
-    assert stats["train_samples"] == 1  # 1 valid train sample (excluding partial)
+    # Every `partial` sample is excluded, whichever reason it exists for: the one appended
+    # here, and the fixture's unlabelled audit samples, which are partial by construction.
+    with samples_file.open("r", encoding="utf-8") as f:
+        expected_partial = sum(
+            1 for line in f if line.strip() and json.loads(line)["annotation_status"] == "partial"
+        )
+    assert expected_partial == 3  # 2 audit + s-partial-001, so the count below is not vacuous
+    assert stats["excluded_partial_samples"] == expected_partial
+    # One train sample carries labels; the partial and audit samples must not appear.
+    assert stats["train_samples"] == 1
 
     with yaml_path.open("r", encoding="utf-8") as f:
         data_cfg = yaml.safe_load(f)

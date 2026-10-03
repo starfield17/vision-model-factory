@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from typing import Dict, List
 
 import pytest
 from factories import DEFAULT_CONFIG, make_evaluation_report, make_gate_policy
@@ -21,6 +22,7 @@ from vision_model_factory.contracts.models import (
     ClassMapItem,
     DatasetRef,
     DecoderSpec,
+    EvaluationReport,
     ExperimentSpec,
     FileRef,
     InputSpec,
@@ -377,3 +379,77 @@ def test_package_data_ships_the_schemas(tmp_path: Path):
     assert "contracts/schemas/*.json" in text
     assert "contracts/schemas/data_v1/*.json" in text
     assert "jsonschema" in text
+
+
+def _model_field_sets(model_cls) -> Dict[str, set]:
+    """Field-name sets of `model_cls` and every contract model reachable from it."""
+    from pydantic import BaseModel
+
+    found: Dict[str, set] = {}
+    stack = [model_cls]
+    seen = set()
+    while stack:
+        cls = stack.pop()
+        if cls in seen or not (isinstance(cls, type) and issubclass(cls, BaseModel)):
+            continue
+        seen.add(cls)
+        found[cls.__name__] = set(cls.model_fields)
+        for hint in cls.model_fields.values():
+            annotation = hint.annotation
+            candidates = [annotation]
+            for arg in getattr(annotation, "__args__", ()) or ():
+                candidates.append(arg)
+            for cand in candidates:
+                if isinstance(cand, type) and issubclass(cand, BaseModel):
+                    stack.append(cand)
+    return found
+
+
+def _schema_property_sets(schema: dict) -> List[set]:
+    """Every distinct property-name set declared in a hand-written schema."""
+    sets = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict):
+                sets.append(set(props))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(schema)
+    return sets
+
+
+@pytest.mark.parametrize(
+    "model_cls,contract",
+    [
+        (EvaluationReport, "evaluation_report"),
+        (ExperimentSpec, "experiment_spec"),
+        (ModelManifest, "model_manifest"),
+        (RunResult, "run_result"),
+    ],
+)
+def test_schema_and_pydantic_model_agree_on_every_field_name(model_cls, contract):
+    """The schema and the model describing the same artifact must not drift apart.
+
+    Both are maintained by hand, and the gap between them is load-bearing: a field that
+    exists only in the model is persisted without ever being validated, which is how a
+    required parity self-test evidence and a relative-difference figure could be added to
+    one side and silently missed on the other. Field *names* are checked here; nullability
+    and numeric bounds are checked by the round-trip tests.
+    """
+    schema = load_schema(contract)
+    declared = _schema_property_sets(schema)
+    everything = set().union(*declared) if declared else set()
+    missing = []
+    for cls_name, fields in _model_field_sets(model_cls).items():
+        # A schema subschema may omit an optional field, but then the field must be absent
+        # from every property set - so require at least one superset that covers it.
+        if not any(fields <= have for have in declared):
+            absent = sorted(fields - everything)
+            missing.append(f"{cls_name}: absent from schema entirely -> {absent or sorted(fields)}")
+    assert not missing, f"{contract} schema does not describe these model fields: {missing}"
