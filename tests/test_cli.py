@@ -554,3 +554,58 @@ def test_registry_lifecycle_through_the_cli(tmp_path: Path, capsys):
     with pytest.raises(SystemExit) as exit_info:
         main(base + ["--register", "model-y"])
     assert "--package-dir" in str(exit_info.value.args[0])
+
+
+class TestRealCheckpointThroughTheCli:
+    """What the CLI can and cannot do with the only real checkpoint available locally.
+
+    `yolo26n.pt` is COCO-pretrained and its exported graph carries 80 classes. The evaluator
+    refuses to score a class map whose declared classes the locked test split cannot measure,
+    because a mean over partly unmeasurable classes is not a number - so an *untrained*
+    public checkpoint can never be released against a narrow-domain dataset. This asserts the
+    refusal is loud and produces no artifact, which is the property that matters: the run is
+    blocked, not silently downgraded. It also records why a real release needs a model trained
+    on a valid dataset, which is the Data-side blocker.
+    """
+
+    __test__ = True
+
+    def test_coco_graph_over_a_narrow_dataset_is_refused_and_writes_nothing(
+        self, tmp_path: Path, capsys
+    ):
+        ckpt = Path("yolo26n.pt")
+        if not ckpt.is_file():
+            pytest.skip("requires the local yolo26n.pt checkpoint")
+
+        from factories import write_dataset_package
+        from ultralytics import YOLO
+
+        from vision_model_factory.export.exporter import export_yolo_checkpoint_to_onnx
+
+        ds = write_dataset_package(tmp_path / "ds", dataset_id="ds-narrow")
+        yolo = YOLO(str(ckpt))
+        class_map = [{"index": i, "class_id": str(n)} for i, n in yolo.names.items()]
+        onnx_path, _sha = export_yolo_checkpoint_to_onnx(
+            checkpoint_path=ckpt, output_path=tmp_path / "model.onnx", imgsz=640
+        )
+        policy = _write_policy(tmp_path / "policy.json", make_gate_policy(policy_id="coco-cli"))
+        eval_out = tmp_path / "evaluation.json"
+
+        # The refusal surfaces as the domain error rather than a SystemExit: `evaluate` does
+        # not translate measurement failures into exit codes it cannot explain, and neither
+        # ValidationError nor TestEvaluationError is caught in main() today.
+        from vision_model_factory.evaluation.evaluator import TestEvaluationError
+
+        with pytest.raises(TestEvaluationError, match="no ground truth") as _exc:
+            main([
+                "evaluate", str(ds), str(onnx_path), str(policy),
+                "--task-json", str(ds / "task.json"), "--run-id", "run-coco",
+                "--class-map-json", json.dumps(class_map),
+                "--parity-split", "audit", "--parity-samples", "2", "--benchmark-runs", "1",
+                "--output", str(eval_out),
+            ])
+
+        assert "bottle" in str(_exc.value) or "can" in str(_exc.value)
+        # Nothing half-built may survive: an evaluation that could not be completed must not
+        # leave a report behind for a later step to publish.
+        assert not eval_out.exists()

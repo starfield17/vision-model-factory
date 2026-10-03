@@ -1,19 +1,35 @@
-"""Convert downloaded African Wildlife dataset into an immutable Dataset Package compliant with 01-data-factory.md."""
+"""Import a public African Wildlife archive into a Dataset Package.
+
+This is an *importer*, not a Data Factory. It performs no annotation work and no review,
+so it declares neither: annotations are recorded as `origin: "imported"` /
+`review_state: "unreviewed"`, and `quality.json` carries `audit: null` and `gate: null`
+because no audit sampling was drawn and no quality gate was run here. The Data schema
+permits those nulls; claiming `human_verified` with `precision: 1.0` and a `policy_sha256`
+of zeros was asserting a review and a verdict that nobody performed.
+
+A package with no quality verdict is still consumable - the Model side digests
+`quality.json` but does not read a gate from it - and it is honest: whoever needs verified
+ground truth has to do the verifying, and the artifact says so.
+"""
 
 import json
 import logging
 import shutil
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
 from PIL import Image
 
 from vision_model_factory.contracts.hashing import compute_sha256_file
-from vision_model_factory.contracts.validators import validate_dataset_package
+from vision_model_factory.contracts.validators import ValidationError, validate_dataset_package
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# Names this import, so a package can be traced back to the run that produced it.
+RUN_ID = "run-import-african-wildlife-v1"
 
 CLASS_NAMES = {
     0: ("buffalo", "African Buffalo", "buffalo"),
@@ -156,10 +172,11 @@ def build_african_wildlife_package(
                         "sample_id": sample_id,
                         "class_id": class_id,
                         "bbox_xyxy": [x1, y1, x2, y2],
-                        "origin": "human",
-                        "annotator_run_id": "run-annotator-import-001",
-                        "review_state": "human_verified",
-                        "score": 1.0,
+                        # Truthful about provenance: these boxes came from a public
+                        # archive. Nobody here drew them and nobody reviewed them.
+                        "origin": "imported",
+                        "annotator_run_id": RUN_ID,
+                        "review_state": "unreviewed",
                     }
                     annotations.append(ann_rec)
 
@@ -177,38 +194,29 @@ def build_african_wildlife_package(
             f.write(json.dumps(a) + "\n")
     annotations_sha = compute_sha256_file(annotations_file)
 
-    # 5. Write quality.json
+    # 5. Write quality.json. Nothing in here may claim work that was not done.
+    source_sha = compute_sha256_file(zip_path)
     quality_spec = {
         "schema_version": "1.0.0",
         "annotation_runs": [
             {
-                "run_id": "run-annotator-import-001",
-                "backend": "ultralytics_curated_import",
-                "model_revision": "v1.0",
+                "run_id": RUN_ID,
+                # The labels were not produced here. `backend` names where they came from,
+                # and `source_sha256` pins the exact archive, so a reader can verify the
+                # claim instead of taking it on trust.
+                "backend": "public_archive_import",
+                "source_archive": str(zip_path.name),
+                "source_sha256": source_sha,
+                "review_performed": False,
             }
         ],
-        "reviewer_runs": [
-            {
-                "run_id": "run-reviewer-import-001",
-                "backend": "human_expert_review",
-            }
-        ],
-        "audit": {
-            "ground_truth": "human",
-            "sampling": "stratified",
-            "sample_count": len(samples),
-            "population_count": len(samples),
-            "metrics": {
-                "precision": 1.0,
-                "recall": 1.0,
-            },
-        },
-        "gate": {
-            "policy_id": "policy-import-strict-v1",
-            "policy_sha256": "0" * 64,
-            "status": "passed",
-            "checks": [{"metric": "integrity", "passed": True}],
-        },
+        # No reviewer ran against this data.
+        "reviewer_runs": [],
+        # No audit sample was drawn, so there is no precision/recall estimate to report.
+        "audit": None,
+        # No quality gate policy exists for an import, and a placeholder digest would be a
+        # forged reference. The absence is the finding.
+        "gate": None,
     }
     quality_file = output_dir / "quality.json"
     with quality_file.open("w", encoding="utf-8") as f:
@@ -219,7 +227,8 @@ def build_african_wildlife_package(
     dataset_manifest = {
         "schema_version": "1.0.0",
         "dataset_id": dataset_id,
-        "created_at": "2026-10-02T10:00:00Z",
+        # When this package was built, not when the upstream data was made.
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "task": {"path": "task.json", "sha256": task_sha},
         "samples": {"path": "samples.jsonl", "sha256": samples_sha},
         "annotations": {"path": "annotations.jsonl", "sha256": annotations_sha},
@@ -233,15 +242,55 @@ def build_african_wildlife_package(
     shutil.rmtree(extracted_temp)
 
     logger.info("Validating built Dataset Package: %s", output_dir)
-    manifest, task, s_recs, a_recs = validate_dataset_package(output_dir)
+    try:
+        manifest, task, s_recs, a_recs = validate_dataset_package(output_dir)
+    except ValidationError as exc:
+        # The importer cannot fix this. Split isolation and annotation quality are Data
+        # decisions: silently re-assigning splits here would manufacture a dataset that
+        # passes, which is worse than one that reports the leak. Say what is wrong, in
+        # numbers, and stop.
+        _report_rejection(output_dir, exc)
+        raise SystemExit(3) from exc
     logger.info(
-        "Successfully validated dataset package '%s' (Samples: %d, Annotations: %d)",
+        "Validated dataset package '%s' (Samples: %d, Annotations: %d); quality verdict: "
+        "none recorded, this import performed no review",
         manifest.dataset_id,
         len(s_recs),
         len(a_recs),
     )
 
     return output_dir
+
+
+def _report_rejection(output_dir: Path, exc: Exception) -> None:
+    """Print the concrete reason a built package is unusable, rather than a bare traceback."""
+    logger.error("Built package FAILED its own contract: %s", exc)
+
+    samples = []
+    for line in (output_dir / "samples.jsonl").read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            samples.append(json.loads(line))
+    by_sha: Dict[str, List[str]] = {}
+    for s in samples:
+        by_sha.setdefault(s["file"]["sha256"], []).append(s["split"])
+    crossing = {k: v for k, v in by_sha.items() if len(set(v)) > 1}
+    if crossing:
+        pairs: Dict[str, int] = {}
+        for splits in crossing.values():
+            for a in sorted(set(splits)):
+                for b in sorted(set(splits)):
+                    if a < b:
+                        pairs[f"{a}/{b}"] = pairs.get(f"{a}/{b}", 0) + 1
+        logger.error(
+            "  %d image bytes appear in more than one split (%s) across %d samples",
+            len(crossing),
+            ", ".join(f"{k}: {v}" for k, v in sorted(pairs.items())),
+            len(samples),
+        )
+        logger.error(
+            "  A model trained on these bytes is scored on images it has already seen. "
+            "Re-splitting is a Data Factory decision, not something this importer may invent."
+        )
 
 
 if __name__ == "__main__":

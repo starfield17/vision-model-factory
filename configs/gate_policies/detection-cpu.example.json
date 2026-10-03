@@ -1,0 +1,21 @@
+{
+  "policy_id": "REPLACE-me-detection-v0",
+  "min_map50": 0.5,
+  "min_map50_95": 0.35,
+  "critical_classes": [
+    {
+      "class_id": "REPLACE-with-a-class-whose-miss-has-a-cost",
+      "min_precision": 0.6,
+      "min_recall": 0.5
+    }
+  ],
+  "require_export_parity_passed": true,
+  "required_target_profiles": [
+    {
+      "backend": "onnxruntime",
+      "provider": "cpu",
+      "precision": "fp32",
+      "max_latency_ms_p95": 80.0
+    }
+  ]
+}
