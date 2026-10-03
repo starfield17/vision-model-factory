@@ -1,6 +1,6 @@
 """YOLO object detection trainer adapter for Vision Model Factory."""
 
-import json
+import hashlib
 import logging
 import os
 import shutil
@@ -13,12 +13,11 @@ import torch.nn as nn
 import yaml
 
 from vision_model_factory.contracts.hashing import compute_sha256_file
-from vision_model_factory.contracts.models import (
-    AnnotationRecord,
-    ClassMapItem,
-    TaskSpec,
+from vision_model_factory.contracts.models import AnnotationRecord, ClassMapItem
+from vision_model_factory.contracts.validators import (
+    validate_class_map_against_task,
+    validate_dataset_package,
 )
-from vision_model_factory.contracts.validators import validate_dataset_package
 from vision_model_factory.trainers.base import (
     BaseTrainerAdapter,
     TrainerConfig,
@@ -26,6 +25,18 @@ from vision_model_factory.trainers.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_filename(sample_id: str) -> str:
+    """Filesystem-safe stem shared by the image and its label file.
+
+    Both are derived from the same function so the pair can never diverge; Ultralytics
+    locates a label file by replacing the image extension, so a mismatch silently drops
+    the annotations for that sample.
+    """
+    if sample_id and all(c.isalnum() or c in "_-" for c in sample_id):
+        return sample_id
+    return hashlib.sha256(sample_id.encode("utf-8")).hexdigest()
 
 
 class TinyYoloMockNet(nn.Module):
@@ -63,14 +74,19 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
         self,
         dataset_dir: Path,
         work_dir: Path,
-        task: TaskSpec,
         class_map: List[ClassMapItem],
     ) -> Tuple[Path, Dict[str, Any]]:
         """
         Convert immutable dataset package to YOLO directory structure.
-        Strictly excludes samples marked 'partial', logging exclusion stats.
+
+        Strictly excludes samples marked 'partial', logging exclusion stats. The task
+        specification is read from the validated package rather than passed in: a caller
+        supplied task could disagree with the package the samples actually came from, and
+        the class index mapping would then be built against the wrong category order.
         """
         manifest, task_spec, samples, annotations = validate_dataset_package(dataset_dir)
+
+        validate_class_map_against_task(class_map, task_spec, require_consecutive_zero_indexed=True)
 
         # Mapping from class_id to integer index
         class_to_idx = {item.class_id: item.index for item in class_map}
@@ -113,18 +129,18 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
 
             # Place image
             src_img_path = (dataset_dir / s.file.path).resolve()
-            dst_img_path = target_img_dir / f"{s.sample_id}{src_img_path.suffix}"
+            safe_id = _safe_filename(s.sample_id)
+            dst_img_path = target_img_dir / f"{safe_id}{src_img_path.suffix}"
             if src_img_path.is_file() and not dst_img_path.exists():
                 try:
                     os.symlink(src_img_path, dst_img_path)
                 except OSError:
                     shutil.copy2(src_img_path, dst_img_path)
             elif not src_img_path.is_file():
-                # If image bytes were not stored, create an empty placeholder for mock mode
-                dst_img_path.touch()
+                raise ValueError(f"Missing dataset image: {s.sample_id}")
 
             # Write YOLO label: <class_idx> <cx> <cy> <w> <h> (normalized 0..1)
-            lbl_file = target_lbl_dir / f"{s.sample_id}.txt"
+            lbl_file = target_lbl_dir / f"{safe_id}.txt"
             lines: List[str] = []
             sample_anns = ann_by_sample.get(s.sample_id, [])
 
@@ -176,13 +192,10 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
         output_dir = config.output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Prepare dataset
-        task_path = config.dataset_dir / "task.json"
-        with task_path.open("r", encoding="utf-8") as f:
-            task = TaskSpec.model_validate(json.load(f))
-
+        # Prepare dataset (validate_dataset_package inside re-verifies the package and
+        # yields the authoritative task for index mapping).
         data_yaml_path, prep_stats = self.prepare_dataset(
-            config.dataset_dir, output_dir, task, config.class_map
+            config.dataset_dir, output_dir, config.class_map
         )
 
         if config.mock_mode or config.model_id == "mock_yolo_v1":
@@ -222,8 +235,18 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
             elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
                 device = "mps"
 
-            model = YOLO(config.model_id)
-            model.train(
+            if config.checkpoint_path is None:
+                return TrainerRunResult(
+                    status="failed",
+                    duration_seconds=round(time.time() - t0, 3),
+                    diagnostics=[
+                        "No verified checkpoint path supplied. Loading a bare model name is "
+                        "refused because the framework would download un-pinned weights."
+                    ],
+                )
+
+            model = YOLO(str(config.checkpoint_path))
+            train_kwargs = dict(
                 data=str(data_yaml_path),
                 epochs=config.params.epochs,
                 imgsz=config.params.imgsz,
@@ -237,6 +260,11 @@ class YoloTrainerAdapter(BaseTrainerAdapter):
                 exist_ok=True,
                 verbose=False,
             )
+            if config.per_run_timeout_seconds is not None:
+                # Ultralytics `time` stops training between epochs, giving a clean
+                # checkpoint instead of a killed process.
+                train_kwargs["time"] = float(config.per_run_timeout_seconds)
+            model.train(**train_kwargs)
 
             weights_path = output_dir / "run" / "weights" / "best.pt"
             if not weights_path.is_file():

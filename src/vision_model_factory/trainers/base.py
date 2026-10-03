@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from vision_model_factory.contracts.models import ClassMapItem, ParamsSpec, TaskSpec
+from vision_model_factory.contracts.models import ClassMapItem, ParamsSpec
 
 
 @dataclass
@@ -21,6 +21,13 @@ class TrainerConfig:
     model_id: str
     checkpoint_sha256: str
     mock_mode: bool = False
+    # Resolved local path of the base checkpoint, already digest-verified by the
+    # registry. Adapters must load from this path rather than a bare model name, which
+    # would let the framework download weights the digest pin never approved.
+    checkpoint_path: Optional[Path] = None
+    # Wall-clock ceiling handed to the training framework so it can stop itself cleanly.
+    # The runner's supervisor is the enforcement backstop; this is the polite path.
+    per_run_timeout_seconds: Optional[float] = None
 
 
 @dataclass
@@ -50,11 +57,14 @@ class BaseTrainerAdapter(ABC):
         self,
         dataset_dir: Path,
         work_dir: Path,
-        task: TaskSpec,
         class_map: List[ClassMapItem],
     ) -> Tuple[Path, Dict[str, Any]]:
         """
-        Convert an immutable dataset package into trainer-specific layout.
+        Convert an immutable dataset package into a trainer-specific layout.
+
+        The task definition is read from the validated package, not passed by the caller,
+        so the class index mapping cannot be built against a task the data disagrees with.
+
         Returns:
             (config_path, stats_dict)
         """

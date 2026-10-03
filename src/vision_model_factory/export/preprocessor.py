@@ -19,7 +19,8 @@ def letterbox_rgb_u8_v1(
     - Preserve aspect ratio: scale = min(target_h / H, target_w / W)
     - Target dimensions: floor(value + 0.5)
     - Bilinear resize
-    - Place smaller half of remaining padding on left/top, filled with pad_value
+    - Split the remaining padding so left/top gets the smaller half: pad = floor(pad_total / 2)
+      (02-model-factory.md 3: "左右/上下剩余 padding 的较小半边放左/上")
     - Convert to NCHW float32 divided by 255.0
 
     Returns:
@@ -54,7 +55,9 @@ def letterbox_rgb_u8_v1(
     pad_w = target_w - new_w
     pad_h = target_h - new_h
 
-    # Smaller half of remaining padding on left / top
+    # Smaller half of the leftover padding goes left/top, larger half right/bottom.
+    # Declared as an explicit rule so consumers reproduce identical pixel offsets: with an
+    # odd leftover this differs from ceil(pad/2) by one pixel, which is visible to a decoder.
     pad_left = pad_w // 2
     pad_right = pad_w - pad_left
     pad_top = pad_h // 2
