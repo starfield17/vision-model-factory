@@ -568,3 +568,31 @@ def test_publication_refuses_a_leaking_dataset_even_when_every_digest_matches(tm
             gate_policy=make_gate_policy(),
         )
     assert not (tmp_path / "rel" / "model-leaky").exists()
+
+
+def test_an_int8_policy_cannot_be_satisfied_by_a_float32_graph(tmp_path: Path):
+    """`precision` is read off the graph, so an int8 release cannot be claimed by paperwork.
+
+    INT8 candidate production is out of scope for this repository, which means a policy that
+    requires an int8 profile can only be satisfied by a graph that actually carries integer
+    quantization nodes. The publisher derives the target from `infer_precision(model.onnx)`
+    rather than from a caller's declaration, so an unmeasurable profile fails its gate
+    instead of being asserted.
+    """
+    from vision_model_factory.contracts.gate_policy import TargetProfile
+
+    policy = make_gate_policy(
+        policy_id="needs-int8",
+        min_map50=0.0,
+        min_map50_95=0.0,
+        required_target_profiles=[TargetProfile(precision="int8", max_latency_ms_p95=50.0)],
+    )
+    report = make_evaluation_report(policy=policy)
+    assert report.gate.status == "failed"
+    int8_checks = [c for c in report.gate.checks if c.metric.startswith("target_benchmark")]
+    assert int8_checks and int8_checks[0].passed is False
+
+    # Publication refuses, and leaves nothing staged behind.
+    with pytest.raises(ReleasePublicationError, match="target_benchmark"):
+        _publish(tmp_path, report=report, policy=policy, package_id="model-int8-claimed")
+    assert not (tmp_path / "releases" / "model-int8-claimed").exists()
