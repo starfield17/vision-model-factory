@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from vision_model_factory.contracts.models import ClassMapItem, ParamsSpec, TaskSpec
+from vision_model_factory.contracts.models import ClassMapItem, ParamsSpec
 from vision_model_factory.trainers.base import TrainerConfig
 from vision_model_factory.trainers.registry import TrainerRegistry
 from vision_model_factory.trainers.yolo import YoloTrainerAdapter
@@ -54,21 +54,14 @@ def test_yolo_dataset_preparation_and_partial_exclusion(synthetic_dataset_dir: P
     # Prepare dataset
     adapter = YoloTrainerAdapter()
     work_dir = tmp_path / "yolo_work"
-    task = TaskSpec(
-        schema_version="1.0.0",
-        task_id="t1",
-        task_type="object_detection",
-        categories=[
-            {"class_id": "bottle", "display_name": "Bottle", "prompt": "bottle"},
-            {"class_id": "can", "display_name": "Can", "prompt": "can"},
-        ],
-    )
     class_map = [
         ClassMapItem(index=0, class_id="bottle"),
         ClassMapItem(index=1, class_id="can"),
     ]
 
-    yaml_path, stats = adapter.prepare_dataset(synthetic_dataset_dir, work_dir, task, class_map)
+    # prepare_dataset takes no task argument: the authoritative task is read from the
+    # validated package, so a caller cannot pair samples with a mismatched category order.
+    yaml_path, stats = adapter.prepare_dataset(synthetic_dataset_dir, work_dir, class_map)
 
     assert yaml_path.is_file()
     assert stats["excluded_partial_samples"] == 1
@@ -77,6 +70,17 @@ def test_yolo_dataset_preparation_and_partial_exclusion(synthetic_dataset_dir: P
     with yaml_path.open("r", encoding="utf-8") as f:
         data_cfg = yaml.safe_load(f)
     assert data_cfg["names"] == {0: "bottle", 1: "can"}
+
+    # Label files must exist for the included samples and carry indices bound to the
+    # package category order (bottle=0, can=1).
+    train_labels = list((work_dir / "yolo_data" / "labels" / "train").glob("*.txt"))
+    assert len(train_labels) == 1
+    index_used = {int(line.split()[0]) for line in train_labels[0].read_text().splitlines() if line}
+    assert index_used == {0}
+
+    # The excluded partial sample must leave neither image nor label behind.
+    assert not (work_dir / "yolo_data" / "images" / "train" / "s-partial-001.jpg").exists()
+    assert not (work_dir / "yolo_data" / "labels" / "train" / "s-partial-001.txt").exists()
 
 
 def test_yolo_mock_training_execution(synthetic_dataset_dir: Path, tmp_path: Path):

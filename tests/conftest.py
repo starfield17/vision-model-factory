@@ -41,20 +41,24 @@ def synthetic_dataset_dir(tmp_path: Path, sample_task_spec_dict: dict) -> Path:
     img1_file = images_dir / "img1.jpg"
     img2_file = images_dir / "img2.jpg"
     img3_file = images_dir / "img3.jpg"
+    img4_file = images_dir / "img4.jpg"
 
     arr1 = np.full((480, 640, 3), 100, dtype=np.uint8)
     arr2 = np.full((480, 640, 3), 150, dtype=np.uint8)
     arr3 = np.full((480, 640, 3), 200, dtype=np.uint8)
+    arr4 = np.full((480, 640, 3), 220, dtype=np.uint8)
 
     Image.fromarray(arr1).save(img1_file)
     Image.fromarray(arr2).save(img2_file)
     Image.fromarray(arr3).save(img3_file)
+    Image.fromarray(arr4).save(img4_file)
 
     img1_sha = compute_sha256_file(img1_file)
     img2_sha = compute_sha256_file(img2_file)
     img3_sha = compute_sha256_file(img3_file)
+    img4_sha = compute_sha256_file(img4_file)
 
-    # 3. Create samples.jsonl (train, val, test)
+    # 3. Create samples.jsonl (train, val, and two test samples)
     samples = [
         {
             "sample_id": "s-001",
@@ -80,6 +84,18 @@ def synthetic_dataset_dir(tmp_path: Path, sample_task_spec_dict: dict) -> Path:
             "width": 640,
             "height": 480,
             "group_id": "grp-3",
+            "split": "test",
+            "annotation_status": "complete_verified",
+        },
+        # Second test-split sample. A locked test set must carry ground truth for every
+        # class the model declares, otherwise macro-averaged mAP is not well defined and
+        # the evaluator refuses to score such a package at all.
+        {
+            "sample_id": "s-004",
+            "file": {"path": "images/img4.jpg", "sha256": img4_sha},
+            "width": 640,
+            "height": 480,
+            "group_id": "grp-4",
             "split": "test",
             "annotation_status": "complete_verified",
         },
@@ -122,6 +138,16 @@ def synthetic_dataset_dir(tmp_path: Path, sample_task_spec_dict: dict) -> Path:
             "review_state": "human_verified",
             "score": 1.0,
         },
+        {
+            "annotation_id": "ann-004",
+            "sample_id": "s-004",
+            "class_id": "can",
+            "bbox_xyxy": [300.0, 40.0, 420.0, 180.0],
+            "origin": "human",
+            "annotator_run_id": "run-ann-01",
+            "review_state": "human_verified",
+            "score": 1.0,
+        },
     ]
     ann_file = ds_dir / "annotations.jsonl"
     with ann_file.open("w", encoding="utf-8") as f:
@@ -134,7 +160,7 @@ def synthetic_dataset_dir(tmp_path: Path, sample_task_spec_dict: dict) -> Path:
         "schema_version": "1.0.0",
         "annotation_runs": [],
         "reviewer_runs": [],
-        "audit": {"sample_count": 3},
+        "audit": {"sample_count": 4},
         "gate": {"status": "passed"},
     }
     quality_file = ds_dir / "quality.json"

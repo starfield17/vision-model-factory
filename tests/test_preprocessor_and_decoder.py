@@ -1,6 +1,7 @@
 """Tests for reference letterbox preprocessor and YOLO output decoder."""
 
 import numpy as np
+import pytest
 
 from vision_model_factory.contracts.models import ClassMapItem
 from vision_model_factory.export.decoder import compute_iou_xyxy, yolo_xywh_scores_v1
@@ -107,3 +108,77 @@ def test_yolo_xywh_scores_v1_decoding():
     # y_orig = (y_model - pad_top) / scale = (240 - 160) / 0.8 = 100, (400 - 160) / 0.8 = 300
     expected_bbox = [300.0, 100.0, 500.0, 300.0]
     np.testing.assert_allclose(det["bbox_xyxy"], expected_bbox, atol=1e-1)
+
+
+def test_letterbox_odd_padding_puts_smaller_half_on_left_and_top():
+    """The one-pixel rule a consumer must reproduce exactly.
+
+    02-model-factory.md 3: "leftover padding's smaller half goes left/top". With an odd
+    leftover the two halves differ by a pixel, and a decoder that assumes the other split
+    maps every box back one pixel off — invisible in metrics, visible in the overlay.
+    """
+    import math
+
+    # 480x640 source into 640x640: scale = 640/640 = 1.0 in width, so height scales to
+    # 480 and pad_h = 160 (even). Force an odd leftover with a 481x640 source.
+    img = np.zeros((481, 640, 3), dtype=np.uint8)
+    img[:, :] = 77
+    tensor, meta = letterbox_rgb_u8_v1(img, target_shape=(640, 640), pad_value=114)
+
+    pad_h = 640 - meta["new_shape"][0]
+    assert pad_h % 2 == 1, "fixture must produce an odd leftover padding to test the split"
+    assert meta["pad_top"] == pad_h // 2
+    assert meta["pad_bottom"] == pad_h - meta["pad_top"]
+    assert meta["pad_top"] < meta["pad_bottom"]
+
+    # The rule as declared in the docstring, and the pixel evidence that it holds.
+    assert meta["pad_top"] == math.floor(pad_h / 2)
+    pad_row = meta["pad_top"] - 1
+    content_row = meta["pad_top"]
+    np.testing.assert_allclose(tensor[0, :, pad_row, :], 114.0 / 255.0, atol=1e-6)
+    np.testing.assert_allclose(tensor[0, :, content_row, :], 77.0 / 255.0, atol=1e-6)
+
+    # Width is flush here (scale limited by width), so the horizontal pads stay zero.
+    assert meta["pad_left"] == 0 and meta["pad_right"] == 0
+
+
+def test_letterbox_odd_width_padding_is_also_smaller_on_the_left():
+    """Same rule on the horizontal axis, where the source is height-limited."""
+    img = np.zeros((640, 481, 3), dtype=np.uint8)
+    img[:, :] = 200
+    _tensor, meta = letterbox_rgb_u8_v1(img, target_shape=(640, 640), pad_value=114)
+
+    pad_w = 640 - meta["new_shape"][1]
+    assert pad_w % 2 == 1
+    assert meta["pad_left"] == pad_w // 2 < meta["pad_right"]
+
+
+def test_letterbox_reports_the_metadata_a_decoder_needs():
+    """Every field `yolo_xywh_scores_v1` inverts through must be present and consistent."""
+    img = np.zeros((300, 500, 3), dtype=np.uint8)
+    tensor, meta = letterbox_rgb_u8_v1(img, target_shape=(640, 640), pad_value=114)
+
+    assert meta["id"] == "letterbox_rgb_u8_v1"
+    assert meta["orig_shape"] == (300, 500)
+    assert meta["target_shape"] == (640, 640)
+    assert meta["pad_left"] + meta["pad_right"] + meta["new_shape"][1] == 640
+    assert meta["pad_top"] + meta["pad_bottom"] + meta["new_shape"][0] == 640
+    assert tensor.shape == (1, 3, 640, 640)
+    assert tensor.dtype == np.float32
+    assert 0.0 <= tensor.min() and tensor.max() <= 1.0
+
+
+def test_letterbox_rejects_input_it_cannot_honestly_process():
+    """A dtype or shape error must not be silently coerced into a wrong tensor."""
+    with pytest.raises(ValueError, match="dtype must be uint8"):
+        letterbox_rgb_u8_v1(np.zeros((10, 10, 3), dtype=np.float32))
+    with pytest.raises(TypeError, match="must be a numpy ndarray"):
+        letterbox_rgb_u8_v1([[0, 0], [0, 0]])
+    with pytest.raises(ValueError, match="Expected 3-channel image"):
+        letterbox_rgb_u8_v1(np.zeros((10, 10, 2), dtype=np.uint8))
+
+    # Grayscale and RGBA are normalised to RGB rather than refused: the contract is RGB.
+    gray, _ = letterbox_rgb_u8_v1(np.zeros((20, 20), dtype=np.uint8), target_shape=(32, 32))
+    assert gray.shape == (1, 3, 32, 32)
+    rgba, _ = letterbox_rgb_u8_v1(np.zeros((20, 20, 4), dtype=np.uint8), target_shape=(32, 32))
+    assert rgba.shape == (1, 3, 32, 32)
